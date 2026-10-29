@@ -176,21 +176,36 @@ impl Capturer {
 
 impl MonitorDuplication {
     fn update_frame(&mut self) -> Result<()> {
-        let timeout_ms = if self.latest_frame.is_some() { 0 } else { 1000 };
-        let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
-        let mut resource: Option<IDXGIResource> = None;
-        let acquired =
-            unsafe { self.duplication.AcquireNextFrame(timeout_ms, &mut frame_info, &mut resource) };
-        if let Err(error) = acquired {
-            // No new frame means the one we hold is still what is on screen.
-            if error.code() == DXGI_ERROR_WAIT_TIMEOUT && self.latest_frame.is_some() {
+        // Before the first desktop image arrives, keep asking: the first frames can carry
+        // only a pointer move, whose texture is not the desktop (it reads back black).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        loop {
+            let waiting_for_first = self.latest_frame.is_none();
+            let timeout_ms = if waiting_for_first { 200 } else { 0 };
+            let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
+            let mut resource: Option<IDXGIResource> = None;
+            let acquired =
+                unsafe { self.duplication.AcquireNextFrame(timeout_ms, &mut frame_info, &mut resource) };
+            if let Err(error) = acquired {
+                // No new frame means the one we hold is still what is on screen.
+                if error.code() == DXGI_ERROR_WAIT_TIMEOUT {
+                    if !waiting_for_first {
+                        return Ok(());
+                    }
+                    if std::time::Instant::now() < deadline {
+                        continue;
+                    }
+                }
+                return Err(error);
+            }
+            let has_desktop_image = frame_info.LastPresentTime != 0;
+            let copy_result = if has_desktop_image { self.keep_frame(resource) } else { Ok(()) };
+            unsafe { self.duplication.ReleaseFrame()? };
+            copy_result?;
+            if self.latest_frame.is_some() || std::time::Instant::now() >= deadline {
                 return Ok(());
             }
-            return Err(error);
         }
-        let copy_result = self.keep_frame(resource);
-        unsafe { self.duplication.ReleaseFrame()? };
-        copy_result
     }
 
     fn keep_frame(&mut self, resource: Option<IDXGIResource>) -> Result<()> {
