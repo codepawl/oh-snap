@@ -1030,7 +1030,8 @@ impl Editor {
         };
         let row_height = 44.0;
         let menu_width = 320.0;
-        let rows = self.addons.len().max(1) + 1;
+        // Each add-on plus "open add-ons folder", or the single empty-state row.
+        let rows = if self.addons.is_empty() { 1 } else { self.addons.len() + 1 };
         let menu = D2D_RECT_F {
             left: (anchor.right - menu_width).max(8.0),
             top: anchor.bottom + 6.0,

@@ -63,8 +63,12 @@ pub fn addons_folder() -> PathBuf {
     PathBuf::from(base).join("oh-snap").join("addons")
 }
 
-/// Every add-on folder with a readable manifest, sorted by name.
+/// Every add-on folder with a readable manifest, sorted by name. The bundled add-ons
+/// are written first when missing, so they exist even without `oh-snap install`.
 pub fn discover() -> Vec<Addon> {
+    if let Err(error) = install_bundled() {
+        crate::log::write(&format!("could not write the bundled add-ons: {error}"));
+    }
     let Ok(entries) = std::fs::read_dir(addons_folder()) else {
         return Vec::new();
     };
