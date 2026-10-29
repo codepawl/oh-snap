@@ -15,6 +15,15 @@ pub enum ParticleMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateMode {
+    /// Download and install a new release when the tray process starts.
+    Auto,
+    /// Only say that a new release is out.
+    Notify,
+    Off,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileFormat {
     Png,
     Jpeg,
@@ -46,6 +55,7 @@ pub struct Settings {
     pub use_win_shift_s: bool,
     // System
     pub start_at_sign_in: bool,
+    pub updates: UpdateMode,
 }
 
 pub const DELAY_CHOICES: [u32; 4] = [0, 3, 5, 10];
@@ -72,6 +82,7 @@ impl Default for Settings {
             use_print_screen: true,
             use_win_shift_s: true,
             start_at_sign_in: true,
+            updates: UpdateMode::Auto,
         }
     }
 }
@@ -132,6 +143,12 @@ fn apply(settings: &mut Settings, key: &str, value: &str) {
             Some("jpeg") => settings.file_format = FileFormat::Jpeg,
             _ => {}
         },
+        "updates" => match text {
+            Some("auto") => settings.updates = UpdateMode::Auto,
+            Some("notify") => settings.updates = UpdateMode::Notify,
+            Some("off") => settings.updates = UpdateMode::Off,
+            _ => {}
+        },
         "card_seconds" => {
             if let Some(seconds) = number.filter(|seconds| CARD_SECONDS_CHOICES.contains(seconds)) {
                 settings.card_seconds = seconds;
@@ -182,6 +199,11 @@ pub fn save(settings: &Settings) {
         FileFormat::Png => "png",
         FileFormat::Jpeg => "jpeg",
     };
+    let updates = match settings.updates {
+        UpdateMode::Auto => "auto",
+        UpdateMode::Notify => "notify",
+        UpdateMode::Off => "off",
+    };
     let folder = settings
         .save_folder
         .as_ref()
@@ -211,6 +233,7 @@ pub fn save(settings: &Settings) {
         format!("use_win_shift_s = {}", settings.use_win_shift_s),
         "# System".to_string(),
         format!("start_at_sign_in = {}", settings.start_at_sign_in),
+        format!("updates = \"{updates}\""),
     ];
     if let Err(error) = std::fs::write(&path, lines.join("\n") + "\n") {
         crate::log::write(&format!("could not save settings: {error}"));
@@ -245,6 +268,7 @@ mod tests {
             use_print_screen: false,
             use_win_shift_s: false,
             start_at_sign_in: false,
+            updates: UpdateMode::Notify,
         };
         save(&changed);
         let loaded = load();

@@ -61,6 +61,8 @@ pub enum CardMessage {
     Failed(String),
     /// The delay timer: seconds left before the capture.
     Countdown(u32),
+    /// A plain note with the spark: updates and other news from the tray process.
+    Notice { title: String, detail: String },
 }
 
 struct CardState {
@@ -334,7 +336,7 @@ impl CardState {
     fn saved_path(&self) -> Option<&Path> {
         match &self.message {
             CardMessage::Saved { path, .. } => path.as_deref(),
-            CardMessage::Failed(_) | CardMessage::Countdown(_) => None,
+            CardMessage::Failed(_) | CardMessage::Countdown(_) | CardMessage::Notice { .. } => None,
         }
     }
 
@@ -455,6 +457,12 @@ impl CardState {
                 draw_mark(&target, Mark::Cross, PADDING, line_top, mark_brush);
                 self.text(&target, "snip failed", PADDING + 16.0, line_top, &text);
                 self.text(&target, reason, PADDING + 16.0, line_top + LINE_HEIGHT, &dim);
+            }
+            CardMessage::Notice { title, detail } => {
+                let spark = D2D_RECT_F { left: PADDING - 6.0, top: line_top - 4.0, right: PADDING + 14.0, bottom: line_top + LINE_HEIGHT + 2.0 };
+                self.graphics().draw_spark(&target, spark, &accent);
+                self.text(&target, title, PADDING + 16.0, line_top, &text);
+                self.text(&target, detail, PADDING + 16.0, line_top + LINE_HEIGHT, &dim);
             }
             CardMessage::Countdown(seconds) => {
                 let spark = D2D_RECT_F { left: PADDING - 6.0, top: line_top - 4.0, right: PADDING + 14.0, bottom: line_top + LINE_HEIGHT + 2.0 };

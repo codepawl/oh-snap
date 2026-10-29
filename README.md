@@ -55,7 +55,7 @@ Open the settings from the tray menu or with `oh-snap settings`. A change saves 
 | Effects | Drag particles: while dragging, at the start and end of the drag, or off. Shutter sound |
 | Shortcuts | PrtSc, Win+Shift+S |
 | After capture | Copy to clipboard, save to folder, folder, PNG or JPG, result card and how long it stays, open the editor |
-| System | Start at sign-in |
+| System | Start at sign-in, updates: install on their own, only tell you, or off. `check now` looks at once |
 
 The settings live in `%APPDATA%\oh-snap\settings.toml`.
 
@@ -125,8 +125,11 @@ oh-snap bench compare [N]    race Snipping Tool
 oh-snap preview DIR          draw the overlay, the card and the editor into PNG files
 oh-snap logo DIR             write the logo as SVG, PNG and ICO
 oh-snap settings             open the settings
+oh-snap update               install the latest release from GitHub
 oh-snap quit                 stop the tray process
 ```
+
+oh-snap updates itself from GitHub Releases. The tray process looks for a new version 10 seconds after it starts. It downloads the new `oh-snap.exe`, checks it against the release's `SHA256SUMS.txt`, and swaps it in between snips, never in the middle of one. A card then shows the new version. Set `Updates` to `notify` to get only the card, or to `off`.
 
 Other apps and scripts can start a snip with `oh-snap capture` or an `oh-snap://capture/window` link.
 
@@ -146,6 +149,7 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 - `card.rs` shows the result without taking the focus. `sound.rs` makes the shutter sound in code, so no audio file ships.
 - `editor.rs` and `annotate.rs` keep the edits as shapes in image pixels. The window and the export use the same drawing code.
 - `addons.rs` runs each add-on as its own process without a window, and stops it after 60 seconds.
+- `updater.rs` finds the latest tag from where `releases/latest` redirects, so it does not use the GitHub API and its limit of 60 calls an hour. HTTPS goes through WinHTTP and SHA-256 through CNG, both part of Windows.
 - `install.rs` writes only to `HKCU` and keeps the old PrtSc setting, so `uninstall` can restore it.
 
 ## Known limits

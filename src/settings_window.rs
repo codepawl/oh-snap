@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{BOOL, Interface, Result, w};
 
 use crate::overlay::{Graphics, Mode};
-use crate::settings::{self, CARD_SECONDS_CHOICES, DELAY_CHOICES, FileFormat, ParticleMode, Settings};
+use crate::settings::{self, CARD_SECONDS_CHOICES, DELAY_CHOICES, FileFormat, ParticleMode, Settings, UpdateMode};
 use crate::icons;
 use crate::style;
 
@@ -64,6 +64,8 @@ enum Field {
     CardSeconds,
     OpenEditor,
     StartAtSignIn,
+    Updates,
+    CheckForUpdates,
 }
 
 struct Row {
@@ -119,6 +121,11 @@ fn columns(settings: &Settings) -> [Vec<Section>; 2] {
         CARD_SECONDS_CHOICES.iter().map(|seconds| format!("{seconds} s")).collect(),
         CARD_SECONDS_CHOICES.iter().position(|seconds| *seconds == settings.card_seconds),
     );
+    let update_modes = [UpdateMode::Auto, UpdateMode::Notify, UpdateMode::Off];
+    let update_choice = (
+        vec!["auto".into(), "notify".into(), "off".into()],
+        update_modes.iter().position(|mode| *mode == settings.updates),
+    );
     let mut folder_actions = vec!["change".to_string()];
     if settings.save_folder.is_some() {
         folder_actions.push("reset".to_string());
@@ -171,7 +178,11 @@ fn columns(settings: &Settings) -> [Vec<Section>; 2] {
         Section {
             icon: icons::GEAR,
             title: "System",
-            rows: vec![row(Field::StartAtSignIn, icons::POWER, "Start at sign-in", on_off(settings.start_at_sign_in))],
+            rows: vec![
+                row(Field::StartAtSignIn, icons::POWER, "Start at sign-in", on_off(settings.start_at_sign_in)),
+                row(Field::Updates, icons::RETAKE, "Updates", update_choice),
+                row(Field::CheckForUpdates, icons::SEARCH, "Version", (vec!["check now".into()], None)),
+            ],
         },
     ];
     [left, right]
@@ -478,6 +489,11 @@ impl SettingsWindow {
             Field::CardSeconds => settings.card_seconds = CARD_SECONDS_CHOICES[hit.option],
             Field::OpenEditor => settings.open_editor = on,
             Field::StartAtSignIn => settings.start_at_sign_in = on,
+            Field::Updates => settings.updates = [UpdateMode::Auto, UpdateMode::Notify, UpdateMode::Off][hit.option],
+            Field::CheckForUpdates => {
+                check_for_updates();
+                return;
+            }
         }
         settings::save(&self.settings);
         if let Some(daemon) = crate::daemon::find_running() {
@@ -578,6 +594,10 @@ impl SettingsWindow {
             hits.push((hit, button));
         }
 
+        if row.field == Field::CheckForUpdates {
+            let version = format!("v{}", crate::updater::CURRENT_VERSION);
+            self.label(target, &version, left + LABEL_WIDTH, text_top, right - 8.0, brushes.dim);
+        }
         if row.field == Field::Folder {
             let folder = self.settings.save_folder().display().to_string();
             self.label(target, &folder, left + LABEL_WIDTH, text_top, right - 8.0, brushes.dim);
@@ -665,4 +685,16 @@ pub fn render_offscreen(graphics: &Graphics, settings: Settings, pointer: (f32, 
     let mut pixels = vec![0u8; (stride * height) as usize];
     unsafe { bitmap.CopyPixels(std::ptr::null(), stride, &mut pixels)? };
     Ok((pixels, width, height))
+}
+
+/// The tray process checks and shows the answer on a card; with no tray process the
+/// command line updater runs instead.
+fn check_for_updates() {
+    if let Some(daemon) = crate::daemon::find_running() {
+        crate::daemon::send_command(daemon, "check-update");
+        return;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::process::Command::new(exe).arg("update").spawn();
+    }
 }

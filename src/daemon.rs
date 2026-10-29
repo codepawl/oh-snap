@@ -9,7 +9,8 @@ use windows::Win32::Foundation::{
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::Foundation::WAIT_TIMEOUT;
+use windows::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
     VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT, VK_SNAPSHOT,
@@ -31,13 +32,16 @@ use crate::capture::Capturer;
 use crate::overlay::{Graphics, Mode};
 use crate::card::CardMessage;
 use crate::confirm::Choice;
-use crate::settings::Settings;
+use crate::settings::{Settings, UpdateMode};
+use crate::updater::Check;
 use crate::snip::{self, SnipRequest};
 use crate::capture::PixelRect;
 
 const DAEMON_CLASS: PCWSTR = w!("oh-snap.daemon");
 const MESSAGE_TRIGGER: u32 = WM_APP + 1;
 const MESSAGE_TRAY: u32 = WM_APP + 2;
+const MESSAGE_UPDATE_CHECKED: u32 = WM_APP + 3;
+const MESSAGE_UPDATE_DOWNLOADED: u32 = WM_APP + 4;
 const COPYDATA_COMMAND: usize = 0x6F68_736E;
 
 const MENU_REGION: usize = 1;
@@ -46,6 +50,7 @@ const MENU_SCREEN: usize = 3;
 const MENU_FOLDER: usize = 4;
 const MENU_QUIT: usize = 5;
 const MENU_SETTINGS: usize = 6;
+const MENU_UPDATE: usize = 7;
 
 static DAEMON_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static SWALLOWING_S: AtomicBool = AtomicBool::new(false);
@@ -57,6 +62,8 @@ struct Daemon {
     capturer: Option<Capturer>,
     graphics: Graphics,
     busy: bool,
+    /// A verified new exe that waits for the current snip to finish.
+    pending_update: Option<(String, Vec<u8>)>,
     settings: Settings,
     /// False until the first apply_settings at start.
     settings_applied: bool,
@@ -88,11 +95,19 @@ pub fn send_command(daemon: HWND, command: &str) {
     }
 }
 
-pub fn run() -> Result<()> {
-    let _single_instance = unsafe { CreateMutexW(None, true, w!("Local\\oh-snap.daemon"))? };
+pub fn run(after_update: bool) -> Result<()> {
+    let single_instance = unsafe { CreateMutexW(None, true, w!("Local\\oh-snap.daemon"))? };
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        return Ok(());
+        if !after_update {
+            return Ok(());
+        }
+        // Started by an update: wait for the old version to let go, then take over.
+        let waited = unsafe { WaitForSingleObject(single_instance, 15_000) };
+        if waited == WAIT_TIMEOUT {
+            return Ok(());
+        }
     }
+    crate::updater::clean_up_old_exe();
 
     unsafe {
         // WIC, used to draw the logo, needs COM.
@@ -114,6 +129,7 @@ pub fn run() -> Result<()> {
         capturer: Capturer::new().ok(),
         graphics,
         busy: false,
+        pending_update: None,
         settings: crate::settings::load(),
         settings_applied: false,
         taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
@@ -148,6 +164,15 @@ pub fn run() -> Result<()> {
     let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), Some(instance), 0)? };
     let settings = daemon.settings.clone();
     daemon.apply_settings(settings);
+    if after_update {
+        let message = CardMessage::Notice {
+            title: format!("updated to {}", crate::updater::CURRENT_VERSION),
+            detail: "oh-snap restarted on the new version".into(),
+        };
+        let _ = crate::card::show(&daemon.graphics, None, message, cursor_area());
+    } else if daemon.settings.updates != UpdateMode::Off {
+        start_update_check(hwnd, false, std::time::Duration::from_secs(10));
+    }
 
     let mut message = MSG::default();
     while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {
@@ -175,6 +200,16 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
         MESSAGE_TRIGGER => {
             let mode = mode_from_number(wparam.0).unwrap_or(daemon.settings.default_mode);
             daemon.snip(hwnd, mode);
+            LRESULT(0)
+        }
+        MESSAGE_UPDATE_CHECKED => {
+            let result = unsafe { Box::from_raw(lparam.0 as *mut (bool, std::result::Result<Check, String>)) };
+            daemon.on_update_checked(hwnd, result.0, result.1);
+            LRESULT(0)
+        }
+        MESSAGE_UPDATE_DOWNLOADED => {
+            let result = unsafe { Box::from_raw(lparam.0 as *mut (String, std::result::Result<Vec<u8>, String>)) };
+            daemon.on_update_downloaded(result.0, result.1);
             LRESULT(0)
         }
         MESSAGE_TRAY => {
@@ -223,6 +258,7 @@ impl Daemon {
             }
             Some("reload-settings") => self.apply_settings(crate::settings::load()),
             Some("settings") => self.open_settings(),
+            Some("check-update") => start_update_check(hwnd, true, std::time::Duration::ZERO),
             Some("quit") => unsafe { PostQuitMessage(0) },
             _ => {}
         }
@@ -269,6 +305,9 @@ impl Daemon {
             capturer.release_cpu_memory();
         }
         self.busy = false;
+        if let Some((version, exe)) = self.pending_update.take() {
+            self.apply_update(version, exe);
+        }
     }
 
     /// The delay setting: a card counts down, then leaves the screen before the capture.
@@ -349,6 +388,7 @@ impl Daemon {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(menu, MF_STRING, MENU_FOLDER, w!("open screenshots"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("settings…"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_UPDATE, w!("check for updates"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("quit"));
             let mut cursor = POINT::default();
@@ -371,6 +411,7 @@ impl Daemon {
                 MENU_SCREEN => self.snip(hwnd, Mode::Screen),
                 MENU_FOLDER => open_folder(&self.settings.save_folder()),
                 MENU_SETTINGS => self.open_settings(),
+                MENU_UPDATE => start_update_check(hwnd, true, std::time::Duration::ZERO),
                 MENU_QUIT => PostQuitMessage(0),
                 _ => {}
             }
@@ -561,4 +602,110 @@ pub fn open_editor(graphics: &Graphics, path: std::path::PathBuf) {
     if let Err(error) = opened {
         crate::log::write(&format!("could not edit {}: {error}", path.display()));
     }
+}
+
+impl Daemon {
+    fn on_update_checked(&mut self, hwnd: HWND, manual: bool, result: std::result::Result<Check, String>) {
+        match result {
+            Ok(Check::UpToDate) if manual => {
+                let message = CardMessage::Notice {
+                    title: "oh-snap is up to date".into(),
+                    detail: format!("version {}", crate::updater::CURRENT_VERSION),
+                };
+                let _ = crate::card::show(&self.graphics, None, message, cursor_area());
+            }
+            Ok(Check::UpToDate) => {}
+            Ok(Check::Available(release)) => {
+                if manual || self.settings.updates == UpdateMode::Auto {
+                    if manual {
+                        let message = CardMessage::Notice {
+                            title: format!("downloading {}", release.version),
+                            detail: "oh-snap restarts by itself when it is ready".into(),
+                        };
+                        let _ = crate::card::show(&self.graphics, None, message, cursor_area());
+                    }
+                    start_update_download(hwnd, release);
+                } else {
+                    let message = CardMessage::Notice {
+                        title: format!("oh-snap {} is out", release.version),
+                        detail: "tray menu > check for updates".into(),
+                    };
+                    let _ = crate::card::show(&self.graphics, None, message, cursor_area());
+                }
+            }
+            Err(error) => {
+                crate::log::write(&format!("update check failed: {error}"));
+                if manual {
+                    let _ = crate::card::show(&self.graphics, None, CardMessage::Failed(format!("update check: {error}")), cursor_area());
+                }
+            }
+        }
+    }
+
+    fn on_update_downloaded(&mut self, version: String, result: std::result::Result<Vec<u8>, String>) {
+        match result {
+            Ok(exe) if self.busy => self.pending_update = Some((version, exe)),
+            Ok(exe) => self.apply_update(version, exe),
+            Err(error) => {
+                crate::log::write(&format!("update download failed: {error}"));
+                let _ = crate::card::show(&self.graphics, None, CardMessage::Failed(format!("update: {error}")), cursor_area());
+            }
+        }
+    }
+
+    /// Swaps the exe and hands over to the new version, which waits for this one to quit.
+    fn apply_update(&mut self, version: String, exe: Vec<u8>) {
+        match crate::updater::install(&exe) {
+            Ok(path) => {
+                crate::log::write(&format!("updating to {version}"));
+                if std::process::Command::new(&path).args(["daemon", "--after-update"]).spawn().is_ok() {
+                    unsafe { PostQuitMessage(0) };
+                }
+            }
+            Err(error) => {
+                crate::log::write(&format!("update install failed: {error}"));
+                let _ = crate::card::show(&self.graphics, None, CardMessage::Failed(format!("update: {error}")), cursor_area());
+            }
+        }
+    }
+}
+
+/// Checks GitHub on a background thread and posts the answer to the daemon window.
+fn start_update_check(hwnd: HWND, manual: bool, delay: std::time::Duration) {
+    let window = hwnd.0 as isize;
+    std::thread::spawn(move || {
+        std::thread::sleep(delay);
+        let result = Box::new((manual, crate::updater::check()));
+        unsafe {
+            let _ = PostMessageW(Some(HWND(window as *mut _)), MESSAGE_UPDATE_CHECKED, WPARAM(0), LPARAM(Box::into_raw(result) as isize));
+        }
+    });
+}
+
+fn start_update_download(hwnd: HWND, release: crate::updater::Release) {
+    let window = hwnd.0 as isize;
+    std::thread::spawn(move || {
+        let result = Box::new((release.version.clone(), crate::updater::download(&release)));
+        unsafe {
+            let _ = PostMessageW(Some(HWND(window as *mut _)), MESSAGE_UPDATE_DOWNLOADED, WPARAM(0), LPARAM(Box::into_raw(result) as isize));
+        }
+    });
+}
+
+/// The exe path of the process that owns a window.
+pub fn process_path_of(hwnd: HWND) -> Option<std::path::PathBuf> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+    let mut process_id = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }.ok()?;
+    let mut buffer = [0u16; 1024];
+    let mut length = buffer.len() as u32;
+    let named = unsafe { QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, windows::core::PWSTR(buffer.as_mut_ptr()), &mut length) };
+    unsafe {
+        let _ = CloseHandle(process);
+    }
+    named.ok()?;
+    Some(std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize])))
 }
