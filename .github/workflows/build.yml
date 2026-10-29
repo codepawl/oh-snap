@@ -19,9 +19,10 @@ jobs:
         run: cargo build --release --locked
 
       - name: Smoke test
+        # oh-snap is a GUI-subsystem program, so PowerShell must be told to wait for it.
         run: |
-          ./target/release/oh-snap.exe --version
-          ./target/release/oh-snap.exe preview preview-out
+          $run = Start-Process ./target/release/oh-snap.exe -ArgumentList 'preview', 'preview-out' -Wait -PassThru -NoNewWindow
+          if ($run.ExitCode -ne 0) { throw "preview exited with $($run.ExitCode)" }
           if (-not (Test-Path preview-out/card-saved.png)) { throw "preview did not render" }
 
       - name: Publish release

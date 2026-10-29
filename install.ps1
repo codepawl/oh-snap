@@ -24,5 +24,10 @@ if ($checksums) {
 }
 
 # `install` copies the program to %LOCALAPPDATA%\Programs\oh-snap and starts it.
-& $download install
+# oh-snap is a GUI-subsystem program, so PowerShell must be told to wait for it.
+$run = Start-Process $download -ArgumentList 'install' -Wait -PassThru -NoNewWindow
 Remove-Item $download
+if ($run.ExitCode -ne 0) {
+    throw "oh-snap install failed with exit code $($run.ExitCode)"
+}
+Write-Host 'oh-snap is installed. Press PrtSc or Win+Shift+S to snip.'
