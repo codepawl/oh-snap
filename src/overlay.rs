@@ -232,6 +232,8 @@ struct OverlayState {
     press_point: Option<(i32, i32)>,
     dragging: bool,
     toolbar_hits: Vec<(Mode, D2D_RECT_F)>,
+    /// The toolbar's close button, which leaves without a snip like Esc.
+    close_hit: Option<D2D_RECT_F>,
     target: ID2D1RenderTarget,
     bitmap: ID2D1Bitmap,
     brushes: Brushes,
@@ -533,7 +535,8 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, message: u32, wparam: WPARAM,
         }
         WM_ERASEBKGND => LRESULT(1),
         WM_SETCURSOR => {
-            let cursor_id = if state.toolbar_item_at(state.cursor).is_some() { IDC_ARROW } else { IDC_CROSS };
+            let over_toolbar = state.toolbar_item_at(state.cursor).is_some() || state.over_close(state.cursor);
+            let cursor_id = if over_toolbar { IDC_ARROW } else { IDC_CROSS };
             if let Ok(cursor) = unsafe { LoadCursorW(None, cursor_id) } {
                 unsafe { SetCursor(Some(cursor)) };
             }
@@ -574,6 +577,10 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, message: u32, wparam: WPARAM,
         }
         WM_LBUTTONDOWN => {
             state.cursor = state.to_screen(lparam);
+            if state.over_close(state.cursor) {
+                state.done = true;
+                return LRESULT(0);
+            }
             if let Some(mode) = state.toolbar_item_at(state.cursor) {
                 state.mode = mode;
                 state.paint();
@@ -627,6 +634,7 @@ impl OverlayState {
             press_point: None,
             dragging: false,
             toolbar_hits: Vec::new(),
+            close_hit: None,
             target,
             bitmap,
             brushes,
@@ -780,6 +788,15 @@ impl OverlayState {
         }
     }
 
+    fn over_close(&self, point: (i32, i32)) -> bool {
+        if self.dragging {
+            return false;
+        }
+        let (x, y) = self.to_client(point.0, point.1);
+        self.close_hit
+            .is_some_and(|rect| x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom)
+    }
+
     fn toolbar_item_at(&self, point: (i32, i32)) -> Option<Mode> {
         if self.dragging {
             return None;
@@ -815,6 +832,7 @@ impl OverlayState {
         }
         if self.dragging {
             self.toolbar_hits.clear();
+            self.close_hit = None;
         } else {
             self.draw_toolbar();
         }
@@ -947,7 +965,12 @@ impl OverlayState {
         let button_height = sizes.iter().map(|size| size.2).fold(0.0, f32::max) + padding_y * 2.0;
         let buttons_width: f32 = sizes.iter().map(|size| size.0 + size.1 + padding_x * 2.0 + ICON_SLOT).sum::<f32>()
             + gap * (labels.len() as f32 - 1.0);
-        let total_width = spark_slot + buttons_width + inset * 2.0;
+        let (close_key_width, _) = self.graphics().measure("[esc]");
+        let (close_name_width, _) = self.graphics().measure(" close");
+        let close_width = close_key_width + close_name_width + padding_x * 2.0 + ICON_SLOT;
+        // A wider gap sets close apart from the three modes.
+        let close_gap = 10.0;
+        let total_width = spark_slot + buttons_width + close_gap + close_width + inset * 2.0;
         let bar_left = ((monitor.left + monitor.right - total_width) / 2.0).round();
         let bar_top = monitor.top + 16.0;
         let bar = D2D_RECT_F {
@@ -994,6 +1017,21 @@ impl OverlayState {
             button_left = button.right + gap;
         }
         self.toolbar_hits = hits;
+
+        let close = D2D_RECT_F {
+            left: button_left - gap + close_gap,
+            top: bar.top + inset,
+            right: button_left - gap + close_gap + close_width,
+            bottom: bar.top + inset + button_height,
+        };
+        if self.over_close(self.cursor) {
+            self.rounded(close, style::BUTTON_RADIUS, &self.brushes.hover, None);
+        }
+        let icon_area = D2D_RECT_F { left: close.left + padding_x - 2.0, top: close.top, right: close.left + padding_x + ICON_SLOT - 6.0, bottom: close.bottom };
+        self.graphics().draw_icon(&self.target, crate::icons::CANCEL, icon_area, &self.brushes.text);
+        self.text("[esc]", close.left + padding_x + ICON_SLOT, close.top + padding_y, &self.brushes.text_dim);
+        self.text(" close", close.left + padding_x + ICON_SLOT + close_key_width, close.top + padding_y, &self.brushes.text);
+        self.close_hit = Some(close);
     }
 
     /// A pixel-grid magnifier with a colour swatch, the hex value and the position.
