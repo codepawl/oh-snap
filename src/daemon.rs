@@ -49,6 +49,10 @@ const COPYDATA_COMMAND: usize = 0x6F68_736E;
 /// about 20 ms to page the capture device back in, from 57 MB to 0.2 MB in Task Manager.
 const TRIM_TIMER: usize = 1;
 const TRIM_AFTER_MILLISECONDS: u32 = 30_000;
+/// A tray process can run for days, so it looks for a release again this often, not only
+/// at start.
+const UPDATE_TIMER: usize = 2;
+const UPDATE_EVERY_MILLISECONDS: u32 = 6 * 60 * 60 * 1000;
 
 const MENU_REGION: usize = 1;
 const MENU_WINDOW: usize = 2;
@@ -180,6 +184,9 @@ pub fn run(after_update: bool) -> Result<()> {
         start_update_check(hwnd, false, std::time::Duration::from_secs(10));
     }
 
+    unsafe {
+        SetTimer(Some(hwnd), UPDATE_TIMER, UPDATE_EVERY_MILLISECONDS, None);
+    }
     schedule_trim(hwnd);
 
     let mut message = MSG::default();
@@ -208,6 +215,12 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
         schedule_trim(hwnd);
     }
     match message {
+        WM_TIMER if wparam.0 == UPDATE_TIMER => {
+            if daemon.settings.updates != UpdateMode::Off && daemon.pending_update.is_none() {
+                start_update_check(hwnd, false, std::time::Duration::ZERO);
+            }
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == TRIM_TIMER => {
             unsafe {
                 let _ = KillTimer(Some(hwnd), TRIM_TIMER);

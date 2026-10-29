@@ -131,7 +131,7 @@ oh-snap update               install the latest release from GitHub
 oh-snap quit                 stop the tray process
 ```
 
-oh-snap updates itself from GitHub Releases. The tray process looks for a new version 10 seconds after it starts. It downloads the new `oh-snap.exe`, checks it against the release's `SHA256SUMS.txt`, and swaps it in between snips, never in the middle of one. A card then shows the new version. Set `Updates` to `notify` to get only the card, or to `off`.
+oh-snap updates itself from GitHub Releases. The tray process looks for a new version 10 seconds after it starts and then every 6 hours. It downloads the new `oh-snap.exe`, checks it against the release's `SHA256SUMS.txt`, and swaps it in between snips, never in the middle of one. A card then shows the new version. Set `Updates` to `notify` to get only the card, or to `off`.
 
 Other apps and scripts can start a snip with `oh-snap capture` or an `oh-snap://capture/window` link.
 
