@@ -14,7 +14,7 @@ Run this line in PowerShell. You do not need admin rights.
 irm https://raw.githubusercontent.com/codepawl/oh-snap/main/install.ps1 | iex
 ```
 
-The installer puts oh-snap in `%LOCALAPPDATA%\Programs\oh-snap`, adds it to your PATH and the Start menu, and starts it at sign-in. To give the shortcuts back to Snipping Tool, run `oh-snap uninstall`.
+The installer puts oh-snap in `%LOCALAPPDATA%\Programs\oh-snap`, adds it to your PATH and the Start menu, and starts it at sign-in. Run the same line again to update by hand. oh-snap also updates itself, see [Updates](#commands). To give the shortcuts back to Snipping Tool, run `oh-snap uninstall`.
 
 You can also download `oh-snap.exe` from [GitHub Releases](https://github.com/codepawl/oh-snap/releases) and run `oh-snap install`, or build it with Cargo:
 
@@ -154,7 +154,7 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 
 ## Known limits
 
-- The tray process holds an open capture device so the overlay is fast. This costs about 40 MB at start and about 84 MB after the first snip, which the GPU driver keeps. The number stays flat after more snips.
+- The tray process keeps its capture device open so the overlay is fast. Thirty seconds after the last snip it gives its memory back to Windows: Task Manager shows about 0.3 MB while it waits. The first snip after that takes about 20 ms longer.
 - The release file is not code-signed yet. Smart App Control or SmartScreen can block it on some computers.
 - Windows does not let a normal process get keys while an elevated window has focus. In that case, use the tray icon.
 - Protected video (DRM) shows as black, and the UAC prompt cannot be captured.

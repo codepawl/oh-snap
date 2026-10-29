@@ -10,7 +10,7 @@ use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::Foundation::WAIT_TIMEOUT;
-use windows::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+use windows::Win32::System::Threading::{CreateMutexW, GetCurrentProcess, SetProcessWorkingSetSize, WaitForSingleObject};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
     VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT, VK_SNAPSHOT,
@@ -25,6 +25,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterWindowMessageW, SW_SHOWNORMAL, SendMessageW, SetForegroundWindow, SetWindowsHookExW,
     TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx,
     WH_KEYBOARD_LL, WM_APP, WM_COPYDATA, WM_KEYDOWN, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYDOWN, WNDCLASSEXW,
+    KillTimer, SetTimer, WM_TIMER,
 };
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
@@ -43,6 +44,11 @@ const MESSAGE_TRAY: u32 = WM_APP + 2;
 const MESSAGE_UPDATE_CHECKED: u32 = WM_APP + 3;
 const MESSAGE_UPDATE_DOWNLOADED: u32 = WM_APP + 4;
 const COPYDATA_COMMAND: usize = 0x6F68_736E;
+/// The process hands its memory back to Windows this long after the last snip, setting or
+/// update. Back-to-back snips stay at full speed; the first one after a quiet spell pays
+/// about 20 ms to page the capture device back in, from 57 MB to 0.2 MB in Task Manager.
+const TRIM_TIMER: usize = 1;
+const TRIM_AFTER_MILLISECONDS: u32 = 30_000;
 
 const MENU_REGION: usize = 1;
 const MENU_WINDOW: usize = 2;
@@ -174,6 +180,8 @@ pub fn run(after_update: bool) -> Result<()> {
         start_update_check(hwnd, false, std::time::Duration::from_secs(10));
     }
 
+    schedule_trim(hwnd);
+
     let mut message = MSG::default();
     while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {
         unsafe {
@@ -196,7 +204,19 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
         return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
     }
     let daemon = unsafe { &mut *daemon_pointer };
+    if matches!(message, MESSAGE_TRIGGER | MESSAGE_TRAY | MESSAGE_UPDATE_CHECKED | MESSAGE_UPDATE_DOWNLOADED | WM_COPYDATA) {
+        schedule_trim(hwnd);
+    }
     match message {
+        WM_TIMER if wparam.0 == TRIM_TIMER => {
+            unsafe {
+                let _ = KillTimer(Some(hwnd), TRIM_TIMER);
+            }
+            if !daemon.busy {
+                trim_memory();
+            }
+            LRESULT(0)
+        }
         MESSAGE_TRIGGER => {
             let mode = mode_from_number(wparam.0).unwrap_or(daemon.settings.default_mode);
             daemon.snip(hwnd, mode);
@@ -708,4 +728,19 @@ pub fn process_path_of(hwnd: HWND) -> Option<std::path::PathBuf> {
     }
     named.ok()?;
     Some(std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize])))
+}
+
+/// Starts or restarts the countdown to `trim_memory`.
+fn schedule_trim(hwnd: HWND) {
+    unsafe {
+        SetTimer(Some(hwnd), TRIM_TIMER, TRIM_AFTER_MILLISECONDS, None);
+    }
+}
+
+/// Moves this process's pages to the standby list. They stay in RAM and come back on
+/// the next snip, but Windows can give them to other apps while oh-snap sits idle.
+fn trim_memory() {
+    unsafe {
+        let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+    }
 }
