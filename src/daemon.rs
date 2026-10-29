@@ -360,9 +360,16 @@ impl Daemon {
             let Some(area) = snip::pick(capturer, &self.graphics, &request)? else {
                 return Ok(());
             };
+            let mut request = request;
             if self.settings.confirm_before_save {
                 let image = snip::crop(capturer, area)?;
-                let answer = crate::confirm::ask(&self.graphics, &image, area)?;
+                // Like Snipping Tool, the snip is on the clipboard once the area is picked;
+                // the dialog only decides about the file.
+                if self.settings.copy_to_clipboard {
+                    crate::image_menu::copy(hwnd, &image);
+                    request.settings.copy_to_clipboard = false;
+                }
+                let answer = crate::confirm::ask(&self.graphics, &image, area, &self.settings.save_folder())?;
                 if answer.stop_asking {
                     self.settings.confirm_before_save = false;
                     crate::settings::save(&self.settings);
@@ -379,9 +386,20 @@ impl Daemon {
                         continue;
                     }
                     Choice::Cancel => return Ok(()),
+                    Choice::Done => {
+                        if self.settings.show_card {
+                            let message = CardMessage::Saved {
+                                copied: self.settings.copy_to_clipboard,
+                                path: answer.saved_as,
+                            };
+                            let _ = crate::card::show(&self.graphics, Some(&image), message, area);
+                        }
+                        return Ok(());
+                    }
                 }
             }
-            let outcome = snip::deliver(capturer, Some(hwnd), &request, area)?;
+            let mut outcome = snip::deliver(capturer, Some(hwnd), &request, area)?;
+            outcome.copied = self.settings.copy_to_clipboard;
             if self.settings.open_editor {
                 crate::editor::open(&self.graphics, outcome.image, outcome.saved_to, false)?;
             } else if self.settings.show_card {

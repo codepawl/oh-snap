@@ -25,11 +25,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetMessageW, GetWindowLongPtrW,
     IDC_ARROW, IDC_HAND, LoadCursorW, MSG, RegisterClassExW, SW_SHOW, SetCursor, SetForegroundWindow,
     SetWindowLongPtrW, ShowWindow, TranslateMessage, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
-    WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Interface, Result, w};
 
+use std::path::{Path, PathBuf};
+
 use crate::capture::PixelRect;
+use crate::image_menu::{self, ImageAction};
 use crate::output::Image;
 use crate::overlay::Graphics;
 use crate::style;
@@ -47,12 +50,16 @@ pub enum Choice {
     Edit,
     Retake,
     Cancel,
+    /// Saved from the right-click menu; nothing more to do.
+    Done,
 }
 
 pub struct Answer {
     pub choice: Choice,
     /// The user ticked "don't ask again".
     pub stop_asking: bool,
+    /// Where "save as…" in the right-click menu wrote the snip.
+    pub saved_as: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -70,6 +77,9 @@ const BUTTONS: [(Choice, char, &str, &str); 4] = [
 
 struct Dialog {
     graphics: *const Graphics,
+    image: *const Image,
+    save_folder: PathBuf,
+    saved_as: Option<PathBuf>,
     target: ID2D1RenderTarget,
     preview: ID2D1Bitmap,
     image_size: (u32, u32),
@@ -82,7 +92,7 @@ struct Dialog {
 }
 
 /// Shows the dialog centred on the snip's monitor and blocks until the user decides.
-pub fn ask(graphics: &Graphics, image: &Image, near: PixelRect) -> Result<Answer> {
+pub fn ask(graphics: &Graphics, image: &Image, near: PixelRect, save_folder: &Path) -> Result<Answer> {
     register_class();
     let center = POINT {
         x: near.left + near.width / 2,
@@ -135,6 +145,7 @@ pub fn ask(graphics: &Graphics, image: &Image, near: PixelRect) -> Result<Answer
     }
     let target = create_target(graphics, hwnd, pixel_width, pixel_height, dpi_x as f32)?;
     let mut dialog = Dialog::new(graphics, target, image, height, scale)?;
+    dialog.save_folder = save_folder.to_path_buf();
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, &mut dialog as *mut Dialog as isize);
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -160,6 +171,7 @@ pub fn ask(graphics: &Graphics, image: &Image, near: PixelRect) -> Result<Answer
     Ok(Answer {
         choice: dialog.choice.unwrap_or(Choice::Cancel),
         stop_asking: dialog.stop_asking,
+        saved_as: dialog.saved_as,
     })
 }
 
@@ -254,6 +266,13 @@ unsafe extern "system" fn dialog_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
             dialog.paint();
             LRESULT(0)
         }
+        WM_RBUTTONUP => {
+            dialog.pointer = dialog.to_dips(lparam);
+            if dialog.over_preview(dialog.pointer) {
+                dialog.open_image_menu(hwnd);
+            }
+            LRESULT(0)
+        }
         WM_KEYDOWN => {
             let key = wparam.0 as u16;
             match key {
@@ -288,6 +307,9 @@ impl Dialog {
         let preview = unsafe { target.CreateBitmap(size, Some(image.bgra.as_ptr() as *const _), image.width * 4, &properties)? };
         Ok(Self {
             graphics,
+            image,
+            save_folder: PathBuf::new(),
+            saved_as: None,
             target,
             preview,
             image_size: (image.width, image.height),
@@ -298,6 +320,26 @@ impl Dialog {
             controls: Vec::new(),
             choice: None,
         })
+    }
+
+    fn over_preview(&self, point: (f32, f32)) -> bool {
+        let frame = preview_rect(self.image_size.0, self.image_size.1, 0.0);
+        point.0 >= frame.left && point.0 < frame.right && point.1 >= frame.top && point.1 < frame.bottom
+    }
+
+    fn open_image_menu(&mut self, hwnd: HWND) {
+        let image = unsafe { &*self.image };
+        match image_menu::show(hwnd) {
+            Some(ImageAction::Copy) => image_menu::copy(hwnd, image),
+            Some(ImageAction::SaveAs) => {
+                if let Some(path) = image_menu::save_as(hwnd, image, &self.save_folder) {
+                    self.saved_as = Some(path);
+                    self.choice = Some(Choice::Done);
+                }
+            }
+            Some(ImageAction::Edit) => self.choice = Some(Choice::Edit),
+            None => {}
+        }
     }
 
     fn graphics(&self) -> &Graphics {

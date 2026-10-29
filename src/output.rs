@@ -80,13 +80,18 @@ pub fn save_png(png_bytes: &[u8], folder: &Path) -> std::io::Result<PathBuf> {
 }
 
 /// Saves encoded image bytes under the next free "Screenshot <time>" name.
-pub fn save_file(bytes: &[u8], folder: &Path, extension: &str) -> std::io::Result<PathBuf> {
-    std::fs::create_dir_all(folder)?;
+/// "Screenshot 2026-10-30 011502", the name Windows gives its own screenshots.
+pub fn screenshot_file_stem() -> String {
     let time = unsafe { GetLocalTime() };
-    let stem = format!(
+    format!(
         "Screenshot {:04}-{:02}-{:02} {:02}{:02}{:02}",
         time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond
-    );
+    )
+}
+
+pub fn save_file(bytes: &[u8], folder: &Path, extension: &str) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(folder)?;
+    let stem = screenshot_file_stem();
     let mut path = folder.join(format!("{stem}.{extension}"));
     let mut copy_number = 2;
     while path.exists() {

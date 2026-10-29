@@ -11,6 +11,7 @@ mod daemon;
 mod editor;
 mod icons;
 mod image_file;
+mod image_menu;
 mod install;
 mod log;
 mod logo;

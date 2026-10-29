@@ -27,12 +27,13 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW, IDC_HAND, KillTimer,
     LoadCursorW, MA_NOACTIVATE, RegisterClassExW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SetCursor, SetTimer,
-    SetWindowLongPtrW, ShowWindow, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCDESTROY,
+    SetWindowLongPtrW, ShowWindow, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCDESTROY, WM_RBUTTONUP,
     WM_PAINT, WM_SETCURSOR, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{HSTRING, Interface, Result, w};
 
 use crate::capture::PixelRect;
+use crate::image_menu::{self, ImageAction};
 use crate::output::Image;
 use crate::overlay::Graphics;
 use crate::style;
@@ -69,6 +70,8 @@ struct CardState {
     graphics: *const Graphics,
     target: ID2D1RenderTarget,
     thumbnail: Option<ID2D1Bitmap>,
+    /// A copy of the snip for the right-click menu.
+    image: Option<Image>,
     image_size: (f32, f32),
     message: CardMessage,
     size: (f32, f32),
@@ -154,6 +157,11 @@ pub fn show(graphics: &Graphics, image: Option<&Image>, message: CardMessage, ne
         graphics,
         target,
         thumbnail,
+        image: image.map(|image| Image {
+            width: image.width,
+            height: image.height,
+            bgra: image.bgra.clone(),
+        }),
         image_size,
         message,
         size: (CARD_WIDTH, card_height),
@@ -318,6 +326,18 @@ unsafe extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lp
             }
             LRESULT(0)
         }
+        WM_RBUTTONUP => {
+            let point = state.to_dips(hwnd, lparam);
+            let over_thumbnail = thumbnail_rect(state.image_size).is_some_and(|frame| {
+                point.0 >= frame.left && point.0 < frame.right && point.1 >= frame.top && point.1 < frame.bottom
+            });
+            if over_thumbnail && state.open_image_menu(hwnd) {
+                unsafe {
+                    let _ = DestroyWindow(hwnd);
+                }
+            }
+            LRESULT(0)
+        }
         WM_TIMER => {
             unsafe {
                 let _ = DestroyWindow(hwnd);
@@ -356,6 +376,46 @@ impl CardState {
             .iter()
             .find(|(_, rect)| point.0 >= rect.left && point.0 < rect.right && point.1 >= rect.top && point.1 < rect.bottom)
             .map(|(action, _)| *action)
+    }
+
+    /// Returns true when the card has done its job and should close.
+    fn open_image_menu(&mut self, hwnd: HWND) -> bool {
+        let Some(image) = self.image.as_ref() else {
+            return false;
+        };
+        unsafe {
+            let _ = KillTimer(Some(hwnd), HIDE_TIMER);
+        }
+        let finished = match image_menu::show(hwnd) {
+            Some(ImageAction::Copy) => {
+                image_menu::copy(hwnd, image);
+                false
+            }
+            Some(ImageAction::SaveAs) => {
+                let folder = match self.saved_path().and_then(Path::parent) {
+                    Some(folder) => folder.to_path_buf(),
+                    None => crate::settings::load().save_folder(),
+                };
+                image_menu::save_as(hwnd, image, &folder).is_some()
+            }
+            Some(ImageAction::Edit) => {
+                let copy = Image {
+                    width: image.width,
+                    height: image.height,
+                    bgra: image.bgra.clone(),
+                };
+                let saved_path = self.saved_path().map(Path::to_path_buf);
+                if let Err(error) = crate::editor::open(self.graphics(), copy, saved_path, false) {
+                    crate::log::write(&format!("editor failed: {error}"));
+                }
+                true
+            }
+            None => false,
+        };
+        if !finished && !self.pointer_inside {
+            unsafe { SetTimer(Some(hwnd), HIDE_TIMER, hide_after_ms(), None) };
+        }
+        finished
     }
 
     fn run(&self, action: Action) {
@@ -536,6 +596,7 @@ pub fn render_offscreen(graphics: &Graphics, image: Option<&Image>, message: Car
         graphics,
         target,
         thumbnail,
+        image: None,
         image_size,
         message,
         size: (CARD_WIDTH, card_height),

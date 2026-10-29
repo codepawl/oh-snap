@@ -20,7 +20,10 @@ if (-not $expected -or $expected -ne $actual) {
 
 # `install` stops a running oh-snap, copies the program to %LOCALAPPDATA%\Programs\oh-snap
 # and starts it. oh-snap is a GUI-subsystem program, so PowerShell must be told to wait.
-$run = Start-Process $download -ArgumentList 'install' -Wait -PassThru -NoNewWindow
+# WaitForExit waits for `install` alone: `Start-Process -Wait` would also wait for the tray
+# process that `install` starts, which keeps running, so the script would never return.
+$run = Start-Process $download -ArgumentList 'install' -PassThru -NoNewWindow
+$run.WaitForExit()
 Remove-Item $download
 if ($run.ExitCode -ne 0) {
     throw "oh-snap install failed with exit code $($run.ExitCode)"
