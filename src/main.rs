@@ -9,6 +9,7 @@ mod confirm;
 mod capture;
 mod daemon;
 mod editor;
+mod icons;
 mod image_file;
 mod install;
 mod log;
@@ -19,6 +20,7 @@ mod overlay;
 mod preview;
 mod snip;
 mod settings;
+mod settings_window;
 mod sound;
 mod style;
 
@@ -78,6 +80,13 @@ fn dispatch(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             editor::run_standalone(path)
         }
         Some("addons") => addons::command(&arguments[1..]),
+        Some("settings") => {
+            if let Some(daemon) = daemon::find_running() {
+                daemon::send_command(daemon, "settings");
+                return Ok(());
+            }
+            settings_window::run_standalone()
+        }
         Some("uninstall") => install::uninstall(),
         Some("logo") => {
             unsafe {
@@ -127,13 +136,11 @@ fn dispatch(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 fn capture_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut mode = Mode::Region;
     let mut area: Option<PixelRect> = None;
+    let mut explicit_mode = None;
     let mut request = SnipRequest {
         mode,
-        clipboard: true,
-        save_to_folder: true,
         output_path: None,
-        shutter_sound: settings::load().shutter_sound,
-        particles: settings::load().particles,
+        settings: settings::load(),
     };
     let mut index = 0;
     while index < arguments.len() {
@@ -148,19 +155,24 @@ fn capture_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error
                 let path = arguments.get(index).ok_or("--out needs a file name")?;
                 request.output_path = Some(PathBuf::from(path));
             }
-            "--no-clipboard" => request.clipboard = false,
-            "--no-save" => request.save_to_folder = false,
-            other => mode = Mode::parse(other).ok_or_else(|| format!("unknown capture option `{other}`"))?,
+            "--no-clipboard" => request.settings.copy_to_clipboard = false,
+            "--no-save" => request.settings.save_to_folder = false,
+            other => explicit_mode = Some(Mode::parse(other).ok_or_else(|| format!("unknown capture option `{other}`"))?),
         }
         index += 1;
     }
+    mode = explicit_mode.unwrap_or(request.settings.default_mode);
     request.mode = mode;
 
-    let plain_interactive = area.is_none() && request.output_path.is_none() && request.clipboard && request.save_to_folder;
+    let plain_interactive = area.is_none() && request.output_path.is_none() && request.settings.copy_to_clipboard && request.settings.save_to_folder;
     if plain_interactive {
         // The tray process is warm; let it snip instead of starting cold here.
         if let Some(daemon) = daemon::find_running() {
-            daemon::send_command(daemon, &format!("capture {}", mode_name(mode)));
+            let command = match explicit_mode {
+                Some(mode) => format!("capture {}", mode_name(mode)),
+                None => "capture".to_string(),
+            };
+            daemon::send_command(daemon, &command);
             return Ok(());
         }
     }

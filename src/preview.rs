@@ -57,6 +57,22 @@ pub fn run(folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
         path: Some(PathBuf::from(r"C:\Users\you\Pictures\Screenshots\Screenshot 2026-10-29 201500.png")),
     };
     write_editor_previews(&graphics, &snipped, folder)?;
+    write_glyph_sheet(&graphics, folder)?;
+    let mut changed = crate::settings::Settings::default();
+    changed.particles = crate::settings::ParticleMode::StartAndEnd;
+    changed.delay_seconds = 3;
+    changed.file_format = crate::settings::FileFormat::Jpeg;
+    changed.save_folder = Some(PathBuf::from(r"D:\shots\work"));
+    let settings_scenes = [
+        ("settings", crate::settings::Settings::default(), (-1.0, -1.0)),
+        ("settings-changed", changed, (930.0, 412.0)),
+    ];
+    for (name, settings, pointer) in settings_scenes {
+        let (pixels, width, height) = crate::settings_window::render_offscreen(&graphics, settings, pointer)?;
+        let path = folder.join(format!("{name}.png"));
+        output::write_png_to(&output::encode_png(&Image { width, height, bgra: pixels })?, &path)?;
+        println!("{}", path.display());
+    }
     for (name, hovered) in [("confirm", None), ("confirm-hover", Some((560.0, 395.0)))] {
         let (pixels, width, height) = crate::confirm::render_offscreen(&graphics, &snipped, hovered)?;
         let path = folder.join(format!("{name}.png"));
@@ -212,4 +228,36 @@ fn drag_path(start: (i32, i32), end: (i32, i32)) -> Vec<(i32, i32)> {
             (x.round() as i32, y.round() as i32)
         })
         .collect()
+}
+
+/// Candidate icon glyphs with their code points, to pick icons by eye.
+fn write_glyph_sheet(graphics: &Graphics, folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
+    let candidates: [u32; 60] = [
+        0xE7A8, 0xE8B3, 0xF407, 0xE737, 0xE7F4, 0xE8A7, 0xE923, 0xE70F, 0xE74E, 0xE8C8,
+        0xE72C, 0xE711, 0xE73E, 0xE8B7, 0xE838, 0xE722, 0xE916, 0xE81C, 0xE790, 0xE7B3,
+        0xE767, 0xE765, 0xE713, 0xE7E8, 0xE72A, 0xE7E6, 0xE8D2, 0xED1A, 0xE890, 0xE8F8,
+        0xE7AD, 0xE8C6, 0xEDFB, 0xE76E, 0xE8E3, 0xE91B, 0xEC4A, 0xE945, 0xE9F5, 0xE8B9,
+        0xE7C5, 0xE8FD, 0xE81E, 0xE73F, 0xE740, 0xE710, 0xE7BA, 0xE946, 0xE9CE, 0xEB9F,
+        0xE8A1, 0xF0E3, 0xE771, 0xE70A, 0xE7C3, 0xE91C, 0xE8EF, 0xE8F1, 0xE718, 0xE734,
+    ];
+    let columns = 10;
+    let cell = (96.0f32, 70.0f32);
+    let width = (columns as f32 * cell.0) as u32;
+    let height = ((candidates.len() as f32 / columns as f32).ceil() * cell.1) as u32;
+    let (pixels, _, _) = crate::overlay::render_canvas(graphics, width, height, |target, brushes| {
+        for (index, code) in candidates.iter().enumerate() {
+            let left = (index % columns) as f32 * cell.0;
+            let top = (index / columns) as f32 * cell.1;
+            let icon_area = D2D_RECT_F { left, top: top + 6.0, right: left + cell.0, bottom: top + 40.0 };
+            if let Some(icon) = char::from_u32(*code) {
+                graphics.draw_icon(target, icon, icon_area, brushes.0);
+            }
+            crate::overlay::draw_label(graphics, target, &format!("{code:04X}"), left + 26.0, top + 44.0, brushes.1);
+        }
+    })?;
+    let path = folder.join("glyphs.png");
+    output::write_png_to(&output::encode_png(&Image { width, height, bgra: pixels })?, &path)?;
+    println!("{}", path.display());
+    Ok(())
 }

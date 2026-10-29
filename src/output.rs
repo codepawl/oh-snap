@@ -76,20 +76,35 @@ pub fn screenshots_folder() -> PathBuf {
 
 /// Saves as "Screenshot 2026-10-29 143012.png", the name Snipping Tool uses.
 pub fn save_png(png_bytes: &[u8], folder: &Path) -> std::io::Result<PathBuf> {
+    save_file(png_bytes, folder, "png")
+}
+
+/// Saves encoded image bytes under the next free "Screenshot <time>" name.
+pub fn save_file(bytes: &[u8], folder: &Path, extension: &str) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(folder)?;
     let time = unsafe { GetLocalTime() };
     let stem = format!(
         "Screenshot {:04}-{:02}-{:02} {:02}{:02}{:02}",
         time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond
     );
-    let mut path = folder.join(format!("{stem}.png"));
+    let mut path = folder.join(format!("{stem}.{extension}"));
     let mut copy_number = 2;
     while path.exists() {
-        path = folder.join(format!("{stem} ({copy_number}).png"));
+        path = folder.join(format!("{stem} ({copy_number}).{extension}"));
         copy_number += 1;
     }
-    std::fs::write(&path, png_bytes)?;
+    std::fs::write(&path, bytes)?;
     Ok(path)
+}
+
+/// JPEG at quality 92: small files that still read well for text.
+pub fn encode_jpeg(image: &Image) -> std::io::Result<Vec<u8>> {
+    let mut jpeg_bytes = Vec::new();
+    let encoder = jpeg_encoder::Encoder::new(&mut jpeg_bytes, 92);
+    encoder
+        .encode(&image.bgra, image.width as u16, image.height as u16, jpeg_encoder::ColorType::Bgra)
+        .map_err(std::io::Error::other)?;
+    Ok(jpeg_bytes)
 }
 
 pub fn write_png_to(png_bytes: &[u8], path: &Path) -> std::io::Result<()> {

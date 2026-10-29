@@ -8,15 +8,14 @@ use windows::Win32::Foundation::HWND;
 use crate::capture::{Capturer, PixelRect};
 use crate::output::{self, Image};
 use crate::overlay::{self, Graphics, Mode, OverlayOptions};
+use crate::settings::{FileFormat, ParticleMode, Settings};
 use crate::sound;
 
 pub struct SnipRequest {
     pub mode: Mode,
-    pub clipboard: bool,
-    pub save_to_folder: bool,
+    /// Overrides the settings' folder: the CLI's `--out`.
     pub output_path: Option<PathBuf>,
-    pub shutter_sound: bool,
-    pub particles: bool,
+    pub settings: Settings,
 }
 
 pub struct SnipOutcome {
@@ -34,7 +33,10 @@ pub fn pick(capturer: &mut Capturer, graphics: &Graphics, request: &SnipRequest)
     let options = OverlayOptions {
         start_mode: request.mode,
         close_after_first_frame: false,
-        particles: request.particles,
+        particles: request.settings.particles,
+        show_loupe: request.settings.show_loupe,
+        show_crosshair: request.settings.show_crosshair,
+        snap_to_windows: request.settings.snap_to_windows,
     };
     Ok(overlay::select_area(graphics, screenshot, options)?.selection)
 }
@@ -47,16 +49,16 @@ pub fn run(capturer: &mut Capturer, graphics: &Graphics, owner: Option<HWND>, re
     deliver(capturer, owner, request, area).map(Some)
 }
 
-/// Captures a known area without any UI (the CLI's `--rect`).
+/// Captures a known area without any UI (the CLI's `--rect`), quietly.
 pub fn run_area(capturer: &mut Capturer, owner: Option<HWND>, request: &SnipRequest, area: PixelRect) -> SnipResult {
     capturer.capture()?;
+    let mut settings = request.settings.clone();
+    settings.shutter_sound = false;
+    settings.particles = ParticleMode::Off;
     let quiet = SnipRequest {
         mode: request.mode,
-        clipboard: request.clipboard,
-        save_to_folder: request.save_to_folder,
         output_path: request.output_path.clone(),
-        shutter_sound: false,
-        particles: false,
+        settings,
     };
     deliver(capturer, owner, &quiet, area).map(Some)
 }
@@ -66,7 +68,7 @@ pub fn crop(capturer: &Capturer, area: PixelRect) -> Result<Image, Box<dyn std::
     Ok(output::crop(capturer.screenshot(), area).ok_or("the selected area is off screen")?)
 }
 
-/// Clipboard and file for an area of the last capture, with the shutter sound.
+/// Clipboard and file for an area of the last capture, as the settings say.
 pub fn deliver(
     capturer: &Capturer,
     owner: Option<HWND>,
@@ -74,20 +76,25 @@ pub fn deliver(
     area: PixelRect,
 ) -> Result<SnipOutcome, Box<dyn std::error::Error>> {
     let started = Instant::now();
-    if request.shutter_sound {
+    let settings = &request.settings;
+    if settings.shutter_sound {
         sound::play_shutter();
     }
     let image = crop(capturer, area)?;
     let png_bytes = output::encode_png(&image)?;
-    if request.clipboard {
+    if settings.copy_to_clipboard {
         output::copy_to_clipboard(owner, &image, &png_bytes)?;
     }
     let mut saved_to = None;
     if let Some(path) = &request.output_path {
         output::write_png_to(&png_bytes, path)?;
         saved_to = Some(path.clone());
-    } else if request.save_to_folder {
-        saved_to = Some(output::save_png(&png_bytes, &output::screenshots_folder())?);
+    } else if settings.save_to_folder {
+        let folder = settings.save_folder();
+        saved_to = Some(match settings.file_format {
+            FileFormat::Png => output::save_file(&png_bytes, &folder, "png")?,
+            FileFormat::Jpeg => output::save_file(&output::encode_jpeg(&image)?, &folder, "jpg")?,
+        });
     }
     crate::log::write(&format!(
         "snip {}x{} at {},{} delivered in {} ms",
@@ -100,7 +107,7 @@ pub fn deliver(
     Ok(SnipOutcome {
         area,
         image,
-        copied: request.clipboard,
+        copied: settings.copy_to_clipboard,
         saved_to,
     })
 }

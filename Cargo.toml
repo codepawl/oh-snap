@@ -1,12 +1,13 @@
 [package]
 name = "oh-snap"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 description = "A fast screen snipping tool for Windows"
 license = "MIT"
 repository = "https://github.com/codepawl/oh-snap"
 
 [dependencies]
+jpeg-encoder = "0.7"
 png = "0.18"
 windows-numerics = "0.3"
 

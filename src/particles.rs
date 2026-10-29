@@ -63,6 +63,16 @@ impl ParticleSystem {
         }
     }
 
+    /// A single burst at one point, for the "start and end" setting.
+    pub fn burst(&mut self, point: (f32, f32), pixel: [u8; 3], count: usize) {
+        for _ in 0..count {
+            if self.particles.len() >= MAX_PARTICLES {
+                break;
+            }
+            self.spawn(point, pixel);
+        }
+    }
+
     fn spawn(&mut self, point: (f32, f32), pixel: [u8; 3]) {
         let is_glyph = self.random() < 0.4;
         let glyph = if is_glyph {

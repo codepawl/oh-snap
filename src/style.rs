@@ -21,6 +21,7 @@ pub const LABEL_SIZE: f32 = 13.0;
 /// Claude Code's spinner glyph, the toolbar's only mark.
 pub const SPARK: &str = "✻";
 pub const SPARK_SIZE: f32 = 19.0;
+pub const ICON_SIZE: f32 = 16.0;
 
 pub const PANEL_RADIUS: f32 = 6.0;
 pub const BUTTON_RADIUS: f32 = 4.0;

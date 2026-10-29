@@ -309,3 +309,18 @@ fn write_user_path(value: &str) -> InstallResult {
     }
     Ok(())
 }
+
+/// The "start at sign-in" setting: points the Run entry at this exe, or removes it.
+pub fn set_start_at_sign_in(enabled: bool) {
+    if !enabled {
+        delete_value(RUN_KEY, "oh-snap");
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let command = format!("\"{}\" daemon", exe.display());
+    if let Err(error) = set_string(RUN_KEY, "oh-snap", &command) {
+        crate::log::write(&format!("could not set the sign-in entry: {error}"));
+    }
+}

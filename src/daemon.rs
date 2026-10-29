@@ -20,7 +20,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CallNextHookEx, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DispatchMessageW, FindWindowExW, GetCursorPos, GetMessageW, GetSystemMetrics, SM_CXSMICON, HHOOK, HICON, HWND_MESSAGE, KBDLLHOOKSTRUCT,
-    LLKHF_INJECTED, MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
+    LLKHF_INJECTED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
     RegisterWindowMessageW, SW_SHOWNORMAL, SendMessageW, SetForegroundWindow, SetWindowsHookExW,
     TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx,
     WH_KEYBOARD_LL, WM_APP, WM_COPYDATA, WM_KEYDOWN, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYDOWN, WNDCLASSEXW,
@@ -45,19 +45,21 @@ const MENU_WINDOW: usize = 2;
 const MENU_SCREEN: usize = 3;
 const MENU_FOLDER: usize = 4;
 const MENU_QUIT: usize = 5;
-const MENU_CONFIRM: usize = 6;
-const MENU_PARTICLES: usize = 7;
-const MENU_SOUND: usize = 8;
+const MENU_SETTINGS: usize = 6;
 
 static DAEMON_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static SWALLOWING_S: AtomicBool = AtomicBool::new(false);
 static SWALLOWING_PRINT_SCREEN: AtomicBool = AtomicBool::new(false);
+static USE_PRINT_SCREEN: AtomicBool = AtomicBool::new(true);
+static USE_WIN_SHIFT_S: AtomicBool = AtomicBool::new(true);
 
 struct Daemon {
     capturer: Option<Capturer>,
     graphics: Graphics,
     busy: bool,
     settings: Settings,
+    /// False until the first apply_settings at start.
+    settings_applied: bool,
     taskbar_created: u32,
     icon: HICON,
 }
@@ -113,6 +115,7 @@ pub fn run() -> Result<()> {
         graphics,
         busy: false,
         settings: crate::settings::load(),
+        settings_applied: false,
         taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
         icon,
     };
@@ -143,6 +146,8 @@ pub fn run() -> Result<()> {
     add_tray_icon(hwnd, daemon.icon);
     crate::overlay::warm_up(&daemon.graphics);
     let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), Some(instance), 0)? };
+    let settings = daemon.settings.clone();
+    daemon.apply_settings(settings);
 
     let mut message = MSG::default();
     while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {
@@ -168,14 +173,15 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
     let daemon = unsafe { &mut *daemon_pointer };
     match message {
         MESSAGE_TRIGGER => {
-            let mode = mode_from_number(wparam.0);
+            let mode = mode_from_number(wparam.0).unwrap_or(daemon.settings.default_mode);
             daemon.snip(hwnd, mode);
             LRESULT(0)
         }
         MESSAGE_TRAY => {
             let mouse_event = (lparam.0 & 0xFFFF) as u32;
             if mouse_event == WM_LBUTTONUP {
-                daemon.snip(hwnd, Mode::Region);
+                let mode = daemon.settings.default_mode;
+                daemon.snip(hwnd, mode);
             } else if mouse_event == WM_RBUTTONUP {
                 daemon.show_menu(hwnd);
             }
@@ -208,14 +214,36 @@ impl Daemon {
         let mut words = command.split_whitespace();
         match words.next() {
             Some("capture") => {
-                let mode = words.next().and_then(Mode::parse).unwrap_or(Mode::Region);
+                let mode = words.next().and_then(Mode::parse);
+                let number = mode.map(mode_number).unwrap_or(DEFAULT_MODE);
                 // Answer the sender first; the snip runs from our own queue.
                 unsafe {
-                    let _ = PostMessageW(Some(hwnd), MESSAGE_TRIGGER, WPARAM(mode_number(mode)), LPARAM(0));
+                    let _ = PostMessageW(Some(hwnd), MESSAGE_TRIGGER, WPARAM(number), LPARAM(0));
                 }
             }
+            Some("reload-settings") => self.apply_settings(crate::settings::load()),
+            Some("settings") => self.open_settings(),
             Some("quit") => unsafe { PostQuitMessage(0) },
             _ => {}
+        }
+    }
+
+    /// Takes new settings: shortcut switches, card time and the sign-in entry follow at once.
+    fn apply_settings(&mut self, settings: Settings) {
+        USE_PRINT_SCREEN.store(settings.use_print_screen, Ordering::SeqCst);
+        USE_WIN_SHIFT_S.store(settings.use_win_shift_s, Ordering::SeqCst);
+        crate::card::set_hide_after(settings.card_seconds);
+        // Only a change by the user touches the sign-in entry; `install` writes the first one.
+        if self.settings_applied && settings.start_at_sign_in != self.settings.start_at_sign_in {
+            crate::install::set_start_at_sign_in(settings.start_at_sign_in);
+        }
+        self.settings = settings;
+        self.settings_applied = true;
+    }
+
+    fn open_settings(&mut self) {
+        if let Err(error) = crate::settings_window::open(&self.graphics, false) {
+            crate::log::write(&format!("settings window failed: {error}"));
         }
     }
 
@@ -226,6 +254,7 @@ impl Daemon {
         self.busy = true;
         // An old card would land in the new screenshot.
         crate::card::close_current();
+        self.count_down();
         if self.capturer.is_none() {
             self.capturer = Capturer::new().ok();
         }
@@ -242,6 +271,21 @@ impl Daemon {
         self.busy = false;
     }
 
+    /// The delay setting: a card counts down, then leaves the screen before the capture.
+    fn count_down(&mut self) {
+        let seconds = self.settings.delay_seconds;
+        if seconds == 0 {
+            return;
+        }
+        for remaining in (1..=seconds).rev() {
+            let _ = crate::card::show(&self.graphics, None, CardMessage::Countdown(remaining), cursor_area());
+            pump_messages_for(std::time::Duration::from_secs(1));
+        }
+        crate::card::close_current();
+        // Give DWM a frame or two to take the card off the screen.
+        pump_messages_for(std::time::Duration::from_millis(80));
+    }
+
     /// Overlay, then (unless switched off) "keep this snip?", until the user saves,
     /// edits or cancels. Retake goes round again with a fresh capture.
     fn snip_until_decided(&mut self, hwnd: HWND, mode: Mode) -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -251,11 +295,8 @@ impl Daemon {
         loop {
             let request = SnipRequest {
                 mode,
-                clipboard: true,
-                save_to_folder: true,
                 output_path: None,
-                shutter_sound: self.settings.shutter_sound,
-                particles: self.settings.particles,
+                settings: self.settings.clone(),
             };
             let Some(area) = snip::pick(capturer, &self.graphics, &request)? else {
                 return Ok(());
@@ -282,12 +323,16 @@ impl Daemon {
                 }
             }
             let outcome = snip::deliver(capturer, Some(hwnd), &request, area)?;
-            let message = CardMessage::Saved {
-                copied: outcome.copied,
-                path: outcome.saved_to,
-            };
-            if let Err(error) = crate::card::show(&self.graphics, Some(&outcome.image), message, outcome.area) {
-                crate::log::write(&format!("card failed: {error}"));
+            if self.settings.open_editor {
+                crate::editor::open(&self.graphics, outcome.image, outcome.saved_to, false)?;
+            } else if self.settings.show_card {
+                let message = CardMessage::Saved {
+                    copied: outcome.copied,
+                    path: outcome.saved_to,
+                };
+                if let Err(error) = crate::card::show(&self.graphics, Some(&outcome.image), message, outcome.area) {
+                    crate::log::write(&format!("card failed: {error}"));
+                }
             }
             return Ok(());
         }
@@ -297,16 +342,13 @@ impl Daemon {
         let Ok(menu) = (unsafe { CreatePopupMenu() }) else {
             return;
         };
-        let checked = |on: bool| if on { MF_STRING | MF_CHECKED } else { MF_STRING };
         unsafe {
-            let _ = AppendMenuW(menu, MF_STRING, MENU_REGION, w!("snip region\tPrtSc"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_REGION, w!("snip region"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_WINDOW, w!("snip window"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_SCREEN, w!("snip screen"));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_FOLDER, w!("open screenshots"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-            let _ = AppendMenuW(menu, checked(self.settings.confirm_before_save), MENU_CONFIRM, w!("ask before saving"));
-            let _ = AppendMenuW(menu, checked(self.settings.particles), MENU_PARTICLES, w!("drag particles"));
-            let _ = AppendMenuW(menu, checked(self.settings.shutter_sound), MENU_SOUND, w!("shutter sound"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_FOLDER, w!("open screenshots"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("settings…"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("quit"));
             let mut cursor = POINT::default();
@@ -327,20 +369,28 @@ impl Daemon {
                 MENU_REGION => self.snip(hwnd, Mode::Region),
                 MENU_WINDOW => self.snip(hwnd, Mode::Window),
                 MENU_SCREEN => self.snip(hwnd, Mode::Screen),
-                MENU_FOLDER => open_folder(&crate::output::screenshots_folder()),
-                MENU_CONFIRM => self.toggle(|settings| &mut settings.confirm_before_save),
-                MENU_PARTICLES => self.toggle(|settings| &mut settings.particles),
-                MENU_SOUND => self.toggle(|settings| &mut settings.shutter_sound),
+                MENU_FOLDER => open_folder(&self.settings.save_folder()),
+                MENU_SETTINGS => self.open_settings(),
                 MENU_QUIT => PostQuitMessage(0),
                 _ => {}
             }
         }
     }
+}
 
-    fn toggle(&mut self, field: impl Fn(&mut Settings) -> &mut bool) {
-        let value = field(&mut self.settings);
-        *value = !*value;
-        crate::settings::save(&self.settings);
+/// Keeps windows painting while the daemon waits, unlike a plain sleep.
+fn pump_messages_for(duration: std::time::Duration) {
+    use windows::Win32::UI::WindowsAndMessaging::{PM_REMOVE, PeekMessageW};
+    let deadline = std::time::Instant::now() + duration;
+    let mut message = MSG::default();
+    while std::time::Instant::now() < deadline {
+        while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+            unsafe {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
@@ -351,6 +401,9 @@ fn open_folder(folder: &std::path::Path) {
     }
 }
 
+/// Posted as the trigger's mode number when the default mode from the settings applies.
+const DEFAULT_MODE: usize = 99;
+
 fn mode_number(mode: Mode) -> usize {
     match mode {
         Mode::Region => 0,
@@ -359,11 +412,12 @@ fn mode_number(mode: Mode) -> usize {
     }
 }
 
-fn mode_from_number(number: usize) -> Mode {
+fn mode_from_number(number: usize) -> Option<Mode> {
     match number {
-        1 => Mode::Window,
-        2 => Mode::Screen,
-        _ => Mode::Region,
+        0 => Some(Mode::Region),
+        1 => Some(Mode::Window),
+        2 => Some(Mode::Screen),
+        _ => None,
     }
 }
 
@@ -393,10 +447,11 @@ fn should_swallow(virtual_key: u32, key_message: u32) -> bool {
     let alt = key_is_down(VK_MENU);
 
     if virtual_key == u32::from(b'S') {
-        if is_down && windows_key && shift && !control && !alt {
+        let enabled = USE_WIN_SHIFT_S.load(Ordering::SeqCst);
+        if enabled && is_down && windows_key && shift && !control && !alt {
             // Key repeat sends more key-downs; only the first one snips.
             if !SWALLOWING_S.swap(true, Ordering::SeqCst) {
-                trigger_from_hook(Mode::Region);
+                trigger_from_hook();
             }
             return true;
         }
@@ -408,9 +463,10 @@ fn should_swallow(virtual_key: u32, key_message: u32) -> bool {
 
     if virtual_key == u32::from(VK_SNAPSHOT.0) {
         // Win+PrtSc and Alt+PrtSc stay with Windows.
-        if is_down && !windows_key && !alt {
+        let enabled = USE_PRINT_SCREEN.load(Ordering::SeqCst);
+        if enabled && is_down && !windows_key && !alt {
             if !SWALLOWING_PRINT_SCREEN.swap(true, Ordering::SeqCst) {
-                trigger_from_hook(Mode::Region);
+                trigger_from_hook();
             }
             return true;
         }
@@ -421,13 +477,13 @@ fn should_swallow(virtual_key: u32, key_message: u32) -> bool {
     false
 }
 
-fn trigger_from_hook(mode: Mode) {
+fn trigger_from_hook() {
     // A harmless injected key: stops the Start menu from opening when Win is released,
     // and makes us the last input source so the overlay may take the foreground.
     send_dummy_key();
     let hwnd = HWND(DAEMON_WINDOW.load(Ordering::SeqCst) as *mut _);
     unsafe {
-        let _ = PostMessageW(Some(hwnd), MESSAGE_TRIGGER, WPARAM(mode_number(mode)), LPARAM(0));
+        let _ = PostMessageW(Some(hwnd), MESSAGE_TRIGGER, WPARAM(DEFAULT_MODE), LPARAM(0));
     }
 }
 

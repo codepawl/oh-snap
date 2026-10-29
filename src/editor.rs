@@ -43,7 +43,8 @@ use crate::style;
 const TOOLBAR_HEIGHT: f32 = 48.0;
 const STATUS_HEIGHT: f32 = 30.0;
 const CANVAS_PADDING: f32 = 24.0;
-const MIN_WIDTH: f32 = 1040.0;
+const MIN_WIDTH: f32 = 1200.0;
+const ICON_SLOT: f32 = 20.0;
 const MIN_HEIGHT: f32 = 560.0;
 const MESSAGE_ADDON_DONE: u32 = WM_APP + 20;
 const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
@@ -914,7 +915,7 @@ impl Editor {
         let mut left = 44.0;
         for (tool, _, label) in TOOLS {
             let control = Control::Tool(tool);
-            let rect = self.text_button(target, brushes, label, left, self.tool == tool, hovered == Some(control));
+            let rect = self.text_button(target, brushes, tool_icon(tool), label, left, self.tool == tool, hovered == Some(control));
             controls.push((control, rect));
             left = rect.right + 2.0;
         }
@@ -971,23 +972,28 @@ impl Editor {
 
         // Right side, laid out from the edge inwards.
         let mut right = width - 10.0;
-        for (control, label) in [(Control::Save, "save"), (Control::Copy, "copy"), (Control::AddonsMenu, "add-ons")] {
+        let actions = [
+            (Control::Save, crate::icons::SAVE, "save"),
+            (Control::Copy, crate::icons::COPY, "copy"),
+            (Control::AddonsMenu, crate::icons::ADD_ONS, "add-ons"),
+        ];
+        for (control, icon, label) in actions {
             let (label_width, _) = self.graphics().measure(label);
-            let button_left = right - label_width - 20.0;
+            let button_left = right - label_width - 20.0 - ICON_SLOT;
             let active = control == Control::AddonsMenu && self.menu_open;
-            let rect = self.text_button(target, brushes, label, button_left, active, hovered == Some(control));
+            let rect = self.text_button(target, brushes, icon, label, button_left, active, hovered == Some(control));
             controls.push((control, rect));
             right = button_left - 2.0;
         }
     }
 
     /// A quiet text button: accent text on a soft fill when active, a faint fill on hover.
-    fn text_button(&self, target: &ID2D1RenderTarget, brushes: &Brushes, label: &str, left: f32, active: bool, hovered: bool) -> D2D_RECT_F {
+    fn text_button(&self, target: &ID2D1RenderTarget, brushes: &Brushes, icon: char, label: &str, left: f32, active: bool, hovered: bool) -> D2D_RECT_F {
         let (label_width, label_height) = self.graphics().measure(label);
         let rect = D2D_RECT_F {
             left,
             top: 9.0,
-            right: left + label_width + 20.0,
+            right: left + label_width + 20.0 + ICON_SLOT,
             bottom: TOOLBAR_HEIGHT - 9.0,
         };
         if active || hovered {
@@ -997,7 +1003,9 @@ impl Editor {
         }
         let brush = if active { &brushes.accent } else { &brushes.text };
         let top = (TOOLBAR_HEIGHT - label_height) / 2.0;
-        self.label(target, label, left + 10.0, top, rect.right, brush);
+        let icon_area = D2D_RECT_F { left: left + 6.0, top: rect.top, right: left + 6.0 + ICON_SLOT - 4.0, bottom: rect.bottom };
+        self.graphics().draw_icon(target, icon, icon_area, brush);
+        self.label(target, label, left + 10.0 + ICON_SLOT, top, rect.right, brush);
         rect
     }
 
@@ -1234,4 +1242,16 @@ pub fn render_offscreen(graphics: &Graphics, image: Image, scene: EditorScene) -
     let mut pixels = vec![0u8; (stride * height) as usize];
     unsafe { bitmap.CopyPixels(std::ptr::null(), stride, &mut pixels)? };
     Ok((pixels, width, height))
+}
+
+fn tool_icon(tool: Tool) -> char {
+    match tool {
+        Tool::Arrow => crate::icons::ARROW,
+        Tool::Box => crate::icons::BOX,
+        Tool::Pen => crate::icons::PEN,
+        Tool::Marker => crate::icons::MARK,
+        Tool::Text => crate::icons::TEXT,
+        Tool::Hide => crate::icons::HIDE,
+        Tool::Crop => crate::icons::CROP,
+    }
 }

@@ -34,7 +34,8 @@ use crate::output::Image;
 use crate::overlay::Graphics;
 use crate::style;
 
-const WIDTH: f32 = 600.0;
+const WIDTH: f32 = 680.0;
+const ICON_SLOT: f32 = 20.0;
 const PADDING: f32 = 16.0;
 const HEADER_HEIGHT: f32 = 40.0;
 const BUTTON_HEIGHT: f32 = 32.0;
@@ -60,11 +61,11 @@ enum Control {
     StopAsking,
 }
 
-const BUTTONS: [(Choice, &str, &str); 4] = [
-    (Choice::Save, "[enter]", " save"),
-    (Choice::Edit, "[e]", " edit"),
-    (Choice::Retake, "[r]", " retake"),
-    (Choice::Cancel, "[esc]", " cancel"),
+const BUTTONS: [(Choice, char, &str, &str); 4] = [
+    (Choice::Save, crate::icons::SAVE, "[enter]", " save"),
+    (Choice::Edit, crate::icons::EDIT, "[e]", " edit"),
+    (Choice::Retake, crate::icons::RETAKE, "[r]", " retake"),
+    (Choice::Cancel, crate::icons::CANCEL, "[esc]", " cancel"),
 ];
 
 struct Dialog {
@@ -380,11 +381,11 @@ impl Dialog {
 
         // Buttons from the right edge inwards, so save sits nearest the snip's size.
         let mut right = WIDTH - PADDING + 8.0;
-        for (choice, key, name) in BUTTONS.iter().rev() {
+        for (choice, icon, key, name) in BUTTONS.iter().rev() {
             let (key_width, _) = self.graphics().measure(key);
             let (name_width, _) = self.graphics().measure(name);
             let button = D2D_RECT_F {
-                left: right - key_width - name_width - 20.0,
+                left: right - key_width - name_width - 20.0 - ICON_SLOT,
                 top: row_top,
                 right,
                 bottom: row_top + BUTTON_HEIGHT,
@@ -397,8 +398,10 @@ impl Dialog {
                 self.fill(&target, button, &hover);
             }
             let (key_brush, name_brush) = if primary { (&accent, &accent) } else { (&dim, &text) };
-            self.label(&target, key, button.left + 10.0, text_top, button.right, key_brush);
-            self.label(&target, name, button.left + 10.0 + key_width, text_top, button.right, name_brush);
+            let icon_area = D2D_RECT_F { left: button.left + 6.0, top: button.top, right: button.left + 6.0 + ICON_SLOT, bottom: button.bottom };
+            self.graphics().draw_icon(&target, *icon, icon_area, name_brush);
+            self.label(&target, key, button.left + 10.0 + ICON_SLOT, text_top, button.right, key_brush);
+            self.label(&target, name, button.left + 10.0 + ICON_SLOT + key_width, text_top, button.right, name_brush);
             controls.push((control, button));
             right = button.left - 4.0;
         }

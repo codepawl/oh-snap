@@ -42,7 +42,16 @@ const PADDING: f32 = 12.0;
 const THUMBNAIL_MAX_HEIGHT: f32 = 168.0;
 const LINE_HEIGHT: f32 = 18.0;
 const SCREEN_MARGIN: f32 = 16.0;
-const HIDE_AFTER_MS: u32 = 5000;
+/// How long a card stays, from the "card_seconds" setting.
+static HIDE_AFTER_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(5000);
+
+pub fn set_hide_after(seconds: u32) {
+    HIDE_AFTER_MS.store(seconds * 1000, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn hide_after_ms() -> u32 {
+    HIDE_AFTER_MS.load(std::sync::atomic::Ordering::Relaxed)
+}
 const HIDE_TIMER: usize = 1;
 // Not in the windows crate's WindowsAndMessaging module.
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -50,6 +59,8 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 pub enum CardMessage {
     Saved { copied: bool, path: Option<PathBuf> },
     Failed(String),
+    /// The delay timer: seconds left before the capture.
+    Countdown(u32),
 }
 
 struct CardState {
@@ -151,7 +162,7 @@ pub fn show(graphics: &Graphics, image: Option<&Image>, message: CardMessage, ne
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        SetTimer(Some(hwnd), HIDE_TIMER, HIDE_AFTER_MS, None);
+        SetTimer(Some(hwnd), HIDE_TIMER, hide_after_ms(), None);
         CURRENT_CARD = hwnd;
     }
     Ok(())
@@ -294,7 +305,7 @@ unsafe extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lp
             state.pointer_inside = false;
             state.hovered_action = None;
             state.paint();
-            unsafe { SetTimer(Some(hwnd), HIDE_TIMER, HIDE_AFTER_MS, None) };
+            unsafe { SetTimer(Some(hwnd), HIDE_TIMER, hide_after_ms(), None) };
             LRESULT(0)
         }
         WM_LBUTTONUP => {
@@ -323,7 +334,7 @@ impl CardState {
     fn saved_path(&self) -> Option<&Path> {
         match &self.message {
             CardMessage::Saved { path, .. } => path.as_deref(),
-            CardMessage::Failed(_) => None,
+            CardMessage::Failed(_) | CardMessage::Countdown(_) => None,
         }
     }
 
@@ -417,10 +428,11 @@ impl CardState {
                 if let Some(path) = path {
                     let file_name = path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
                     let mut right = width - PADDING;
-                    for (action, label) in [(Action::OpenFolder, "folder"), (Action::Edit, "edit")] {
+                    let actions = [(Action::OpenFolder, crate::icons::FOLDER, "folder"), (Action::Edit, crate::icons::EDIT, "edit")];
+                    for (action, icon, label) in actions {
                         let (label_width, _) = self.graphics().measure(label);
                         let button = D2D_RECT_F {
-                            left: right - label_width - 12.0,
+                            left: right - label_width - 12.0 - 18.0,
                             top: line_top - 3.0,
                             right,
                             bottom: line_top + LINE_HEIGHT + 1.0,
@@ -429,7 +441,9 @@ impl CardState {
                             let shape = D2D1_ROUNDED_RECT { rect: button, radiusX: 4.0, radiusY: 4.0 };
                             unsafe { target.FillRoundedRectangle(&shape, &hover) };
                         }
-                        self.text(&target, label, button.left + 6.0, line_top, &accent);
+                        let icon_area = D2D_RECT_F { left: button.left + 3.0, top: button.top, right: button.left + 21.0, bottom: button.bottom };
+                        self.graphics().draw_icon(&target, icon, icon_area, &accent);
+                        self.text(&target, label, button.left + 6.0 + 18.0, line_top, &accent);
                         buttons.push((action, button));
                         right = button.left - 2.0;
                     }
@@ -441,6 +455,11 @@ impl CardState {
                 draw_mark(&target, Mark::Cross, PADDING, line_top, mark_brush);
                 self.text(&target, "snip failed", PADDING + 16.0, line_top, &text);
                 self.text(&target, reason, PADDING + 16.0, line_top + LINE_HEIGHT, &dim);
+            }
+            CardMessage::Countdown(seconds) => {
+                let spark = D2D_RECT_F { left: PADDING - 6.0, top: line_top - 4.0, right: PADDING + 14.0, bottom: line_top + LINE_HEIGHT + 2.0 };
+                self.graphics().draw_spark(&target, spark, &accent);
+                self.text(&target, &format!("snipping in {seconds}"), PADDING + 16.0, line_top, &text);
             }
         }
         // Anywhere else on the card opens the file.

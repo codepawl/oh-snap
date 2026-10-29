@@ -53,6 +53,7 @@ use windows::core::{BOOL, HSTRING, Interface, Result, w};
 
 use crate::capture::{PixelRect, Screenshot};
 use crate::particles::ParticleSystem;
+use crate::settings::ParticleMode;
 use crate::style;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +87,8 @@ pub struct Graphics {
     pub(crate) label_format: IDWriteTextFormat,
     /// Centred in its box; draws the ✻ mark.
     pub(crate) spark_format: IDWriteTextFormat,
+    /// Segoe Fluent Icons on Windows 11, Segoe MDL2 Assets on Windows 10.
+    pub(crate) icon_format: IDWriteTextFormat,
 }
 
 impl Graphics {
@@ -110,12 +113,28 @@ impl Graphics {
             spark_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
             spark_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         }
+        let icon_family = pick_family(&dwrite, &["Segoe Fluent Icons", "Segoe MDL2 Assets"]).unwrap_or("Segoe MDL2 Assets");
+        let icon_format = create_format(&dwrite, icon_family, style::ICON_SIZE)?;
+        unsafe {
+            icon_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+            icon_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        }
         Ok(Self {
             d2d,
             dwrite,
             label_format,
             spark_format,
+            icon_format,
         })
+    }
+
+    /// Draws one glyph of the Windows icon font, centred in `area`.
+    pub(crate) fn draw_icon(&self, target: &ID2D1RenderTarget, icon: char, area: D2D_RECT_F, brush: &ID2D1SolidColorBrush) {
+        let mut buffer = [0u16; 2];
+        let utf16 = icon.encode_utf16(&mut buffer);
+        unsafe {
+            target.DrawText(utf16, &self.icon_format, &area, brush, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+        }
     }
 
     pub(crate) fn draw_spark(&self, target: &ID2D1RenderTarget, area: D2D_RECT_F, brush: &ID2D1SolidColorBrush) {
@@ -161,27 +180,30 @@ fn create_format(dwrite: &IDWriteFactory, family: &str, size: f32) -> Result<IDW
 }
 
 fn pick_mono_font(dwrite: &IDWriteFactory) -> &'static str {
+    pick_family(dwrite, &style::MONO_FONTS).unwrap_or(style::MONO_FONTS[style::MONO_FONTS.len() - 1])
+}
+
+/// The first family in `families` that is installed.
+fn pick_family(dwrite: &IDWriteFactory, families: &[&'static str]) -> Option<&'static str> {
     let mut collection = None;
-    if unsafe { dwrite.GetSystemFontCollection(&mut collection, false) }.is_ok() {
-        if let Some(collection) = collection {
-            for family in style::MONO_FONTS {
-                let mut index = 0;
-                let mut exists = BOOL(0);
-                let found = unsafe { collection.FindFamilyName(&HSTRING::from(family), &mut index, &mut exists) };
-                if found.is_ok() && exists.as_bool() {
-                    return family;
-                }
-            }
-        }
-    }
-    style::MONO_FONTS[style::MONO_FONTS.len() - 1]
+    unsafe { dwrite.GetSystemFontCollection(&mut collection, false) }.ok()?;
+    let collection = collection?;
+    families.iter().copied().find(|family| {
+        let mut index = 0;
+        let mut exists = BOOL(0);
+        let found = unsafe { collection.FindFamilyName(&HSTRING::from(*family), &mut index, &mut exists) };
+        found.is_ok() && exists.as_bool()
+    })
 }
 
 pub struct OverlayOptions {
     pub start_mode: Mode,
     /// For the benchmark: close right after the first frame is on screen.
     pub close_after_first_frame: bool,
-    pub particles: bool,
+    pub particles: ParticleMode,
+    pub show_loupe: bool,
+    pub show_crosshair: bool,
+    pub snap_to_windows: bool,
 }
 
 pub struct OverlayOutcome {
@@ -222,6 +244,12 @@ struct OverlayState {
     particles: Option<ParticleSystem>,
     particle_brush: ID2D1SolidColorBrush,
     timer_running: bool,
+    particle_mode: ParticleMode,
+    show_loupe: bool,
+    show_crosshair: bool,
+    snap_to_windows: bool,
+    /// With start-and-end particles the overlay stays a moment so the last burst shows.
+    close_at: Option<Instant>,
 }
 
 const PARTICLE_TIMER: usize = 7;
@@ -264,7 +292,11 @@ pub fn select_area(graphics: &Graphics, screenshot: &Screenshot, options: Overla
     let cursor = (cursor_point.x, cursor_point.y);
     let mut state = OverlayState::new(graphics, screenshot, target, window_rects, options.start_mode, cursor)?;
     state.close_after_first_frame = options.close_after_first_frame;
-    if options.particles {
+    state.particle_mode = options.particles;
+    state.show_loupe = options.show_loupe;
+    state.show_crosshair = options.show_crosshair;
+    state.snap_to_windows = options.snap_to_windows;
+    if options.particles != ParticleMode::Off {
         state.particles = Some(ParticleSystem::new(cursor.0 as u32 ^ (cursor.1 as u32).rotate_left(16)));
     }
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, &mut state as *mut OverlayState as isize) };
@@ -511,20 +543,26 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, message: u32, wparam: WPARAM,
             state.cursor = state.to_screen(lparam);
             if let Some(press_point) = state.press_point {
                 let moved = (state.cursor.0 - press_point.0).abs() + (state.cursor.1 - press_point.1).abs();
-                if state.mode == Mode::Region && moved > 3 {
+                if state.mode == Mode::Region && moved > 3 && !state.dragging {
                     state.dragging = true;
+                    if state.particle_mode == ParticleMode::StartAndEnd {
+                        state.burst_particles(hwnd, press_point);
+                    }
                 }
             }
-            if state.dragging {
+            if state.dragging && state.particle_mode == ParticleMode::WhileDragging {
                 state.trail_particles(hwnd);
             }
             state.paint();
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == PARTICLE_TIMER => {
+            if state.close_at.is_some_and(|close_at| Instant::now() >= close_at) {
+                state.done = true;
+            }
             if let Some(particles) = state.particles.as_mut() {
                 particles.update();
-                if particles.is_empty() {
+                if particles.is_empty() && state.close_at.is_none() {
                     unsafe {
                         let _ = KillTimer(Some(hwnd), PARTICLE_TIMER);
                     }
@@ -551,7 +589,7 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, message: u32, wparam: WPARAM,
                 unsafe {
                     let _ = ReleaseCapture();
                 }
-                state.finish_press();
+                state.finish_press(hwnd);
             }
             LRESULT(0)
         }
@@ -600,6 +638,11 @@ impl OverlayState {
             particles: None,
             particle_brush: unsafe { target_for_brush.CreateSolidColorBrush(&style::TEXT, None)? },
             timer_running: false,
+            particle_mode: ParticleMode::WhileDragging,
+            show_loupe: true,
+            show_crosshair: true,
+            snap_to_windows: true,
+            close_at: None,
         })
     }
 
@@ -612,6 +655,18 @@ impl OverlayState {
         };
         particles.trail(point, pixel);
         if !self.timer_running && !particles.is_empty() {
+            unsafe { SetTimer(Some(hwnd), PARTICLE_TIMER, 15, None) };
+            self.timer_running = true;
+        }
+    }
+
+    fn burst_particles(&mut self, hwnd: HWND, at: (i32, i32)) {
+        let point = self.to_client(at.0, at.1);
+        let pixel = self.screenshot().pixel_at(at.0, at.1).unwrap_or([128, 128, 128]);
+        if let Some(particles) = self.particles.as_mut() {
+            particles.burst(point, pixel, 40);
+        }
+        if !self.timer_running {
             unsafe { SetTimer(Some(hwnd), PARTICLE_TIMER, 15, None) };
             self.timer_running = true;
         }
@@ -663,6 +718,7 @@ impl OverlayState {
         }
         match self.mode {
             Mode::Screen => Some(self.current_monitor()),
+            Mode::Region if !self.snap_to_windows => None,
             Mode::Region | Mode::Window => self
                 .window_rects
                 .iter()
@@ -671,14 +727,21 @@ impl OverlayState {
         }
     }
 
-    fn finish_press(&mut self) {
+    fn finish_press(&mut self, hwnd: HWND) {
         let picked = self.highlighted();
+        let was_dragging = self.dragging;
         self.press_point = None;
         self.dragging = false;
         if let Some(rect) = picked {
             if rect.width >= 2 && rect.height >= 2 {
                 self.selection = Some(rect);
-                self.done = true;
+                if was_dragging && self.particle_mode == ParticleMode::StartAndEnd && self.particles.is_some() {
+                    self.burst_particles(hwnd, self.cursor);
+                    self.close_at = Some(Instant::now() + std::time::Duration::from_millis(350));
+                    self.paint();
+                } else {
+                    self.done = true;
+                }
                 return;
             }
         }
@@ -747,7 +810,7 @@ impl OverlayState {
             self.draw_frame(rect);
             self.draw_size_label(rect);
         }
-        if self.mode == Mode::Region && !self.dragging {
+        if self.show_crosshair && self.mode == Mode::Region && !self.dragging {
             self.draw_crosshair();
         }
         if self.dragging {
@@ -758,7 +821,9 @@ impl OverlayState {
         if let Some(particles) = &self.particles {
             particles.draw(&self.target, &self.particle_brush, &self.graphics().label_format);
         }
-        self.draw_loupe();
+        if self.show_loupe {
+            self.draw_loupe();
+        }
         unsafe {
             let _ = target.EndDraw(None, None);
         }
@@ -880,7 +945,7 @@ impl OverlayState {
             .collect();
         let spark_slot = 34.0;
         let button_height = sizes.iter().map(|size| size.2).fold(0.0, f32::max) + padding_y * 2.0;
-        let buttons_width: f32 = sizes.iter().map(|size| size.0 + size.1 + padding_x * 2.0).sum::<f32>()
+        let buttons_width: f32 = sizes.iter().map(|size| size.0 + size.1 + padding_x * 2.0 + ICON_SLOT).sum::<f32>()
             + gap * (labels.len() as f32 - 1.0);
         let total_width = spark_slot + buttons_width + inset * 2.0;
         let bar_left = ((monitor.left + monitor.right - total_width) / 2.0).round();
@@ -907,7 +972,7 @@ impl OverlayState {
             let button = D2D_RECT_F {
                 left: button_left,
                 top: bar.top + inset,
-                right: button_left + key_width + name_width + padding_x * 2.0,
+                right: button_left + key_width + name_width + padding_x * 2.0 + ICON_SLOT,
                 bottom: bar.top + inset + button_height,
             };
             let active = *mode == self.mode;
@@ -921,8 +986,10 @@ impl OverlayState {
             } else {
                 (&self.brushes.text_dim, &self.brushes.text)
             };
-            self.text(key, button.left + padding_x, button.top + padding_y, key_brush);
-            self.text(name, button.left + padding_x + key_width, button.top + padding_y, name_brush);
+            let icon_area = D2D_RECT_F { left: button.left + padding_x - 2.0, top: button.top, right: button.left + padding_x + ICON_SLOT - 6.0, bottom: button.bottom };
+            self.graphics().draw_icon(&self.target, mode_icon(*mode), icon_area, name_brush);
+            self.text(key, button.left + padding_x + ICON_SLOT, button.top + padding_y, key_brush);
+            self.text(name, button.left + padding_x + ICON_SLOT + key_width, button.top + padding_y, name_brush);
             hits.push((*mode, button));
             button_left = button.right + gap;
         }
@@ -1120,5 +1187,59 @@ fn pickable_window_rect(hwnd: HWND) -> Option<PixelRect> {
             return None;
         }
         Some(rect)
+    }
+}
+
+/// Draws into memory with ivory and dim brushes; for the preview command's sheets.
+pub(crate) fn render_canvas(
+    graphics: &Graphics,
+    width: u32,
+    height: u32,
+    draw: impl Fn(&ID2D1RenderTarget, (&ID2D1SolidColorBrush, &ID2D1SolidColorBrush)),
+) -> Result<(Vec<u8>, u32, u32)> {
+    let imaging: IWICImagingFactory = unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
+    let bitmap = unsafe { imaging.CreateBitmap(width, height, &GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad)? };
+    let properties = D2D1_RENDER_TARGET_PROPERTIES {
+        r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        pixelFormat: D2D1_PIXEL_FORMAT {
+            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+        },
+        dpiX: 96.0,
+        dpiY: 96.0,
+        usage: D2D1_RENDER_TARGET_USAGE_NONE,
+        minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+    };
+    let target = unsafe { graphics.d2d.CreateWicBitmapRenderTarget(&bitmap, &properties)? };
+    unsafe {
+        let ivory = target.CreateSolidColorBrush(&style::TEXT, None)?;
+        let dim = target.CreateSolidColorBrush(&style::TEXT_DIM, None)?;
+        target.BeginDraw();
+        target.Clear(Some(&style::INK));
+        draw(&target, (&ivory, &dim));
+        target.EndDraw(None, None)?;
+    }
+    let stride = width * 4;
+    let mut pixels = vec![0u8; (stride * height) as usize];
+    unsafe { bitmap.CopyPixels(std::ptr::null(), stride, &mut pixels)? };
+    Ok((pixels, width, height))
+}
+
+pub(crate) fn draw_label(graphics: &Graphics, target: &ID2D1RenderTarget, text: &str, left: f32, top: f32, brush: &ID2D1SolidColorBrush) {
+    let utf16: Vec<u16> = text.encode_utf16().collect();
+    let layout_rect = D2D_RECT_F { left, top, right: left + 400.0, bottom: top + 30.0 };
+    unsafe {
+        target.DrawText(&utf16, &graphics.label_format, &layout_rect, brush, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+    }
+}
+
+/// Room for an icon in front of a button label.
+const ICON_SLOT: f32 = 22.0;
+
+pub(crate) fn mode_icon(mode: Mode) -> char {
+    match mode {
+        Mode::Region => crate::icons::REGION,
+        Mode::Window => crate::icons::WINDOW,
+        Mode::Screen => crate::icons::SCREEN,
     }
 }

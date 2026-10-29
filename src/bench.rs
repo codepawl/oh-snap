@@ -45,7 +45,10 @@ pub fn run(overlay_rounds: usize) -> Result<(), Box<dyn std::error::Error>> {
         let options = OverlayOptions {
             start_mode: Mode::Region,
             close_after_first_frame: true,
-            particles: false,
+            particles: crate::settings::ParticleMode::Off,
+            show_loupe: true,
+            show_crosshair: true,
+            snap_to_windows: true,
         };
         let outcome = overlay::select_area(&graphics, screenshot, options)?;
         if let Some(first_frame_at) = outcome.first_frame_at {

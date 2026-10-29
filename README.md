@@ -23,7 +23,7 @@ cargo install --git https://github.com/codepawl/oh-snap
 oh-snap install
 ```
 
-oh-snap runs on Windows 10 and 11. macOS and Linux are not supported yet.
+oh-snap runs on Windows 10 and 11. macOS and Linux versions are coming.
 
 ## Use
 
@@ -43,7 +43,21 @@ After you pick an area, oh-snap asks if you want to keep it. Press Enter to save
 
 ![The dialog that asks to keep the snip](docs/confirm.png)
 
-You can turn the question, the particles and the shutter sound on and off from the tray menu.
+## Settings
+
+Open the settings from the tray menu or with `oh-snap settings`. A change saves at once.
+
+![The settings window](docs/settings.png)
+
+| Group | Settings |
+| --- | --- |
+| Capture | Default mode, delay of 3, 5 or 10 seconds, ask before saving, snap to windows, loupe, crosshair |
+| Effects | Drag particles: while dragging, at the start and end of the drag, or off. Shutter sound |
+| Shortcuts | PrtSc, Win+Shift+S |
+| After capture | Copy to clipboard, save to folder, folder, PNG or JPG, result card and how long it stays, open the editor |
+| System | Start at sign-in |
+
+The settings live in `%APPDATA%\oh-snap\settings.toml`.
 
 A snip plays a short shutter sound. It goes to the clipboard as a bitmap and as PNG, and to `Pictures\Screenshots`, the folder that Windows and Photos use. A card in the corner shows the snip and the file name. Click the card to open the image. Click `edit` to draw on it, or `folder` to show the file in Explorer.
 
@@ -110,6 +124,7 @@ oh-snap bench [ROUNDS]       measure capture and overlay speed
 oh-snap bench compare [N]    race Snipping Tool
 oh-snap preview DIR          draw the overlay, the card and the editor into PNG files
 oh-snap logo DIR             write the logo as SVG, PNG and ICO
+oh-snap settings             open the settings
 oh-snap quit                 stop the tray process
 ```
 
@@ -144,7 +159,7 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 ## Next
 
 - Add-ons that run after every snip, not only from the editor.
-- macOS and Linux versions.
+- macOS and Linux versions, which are coming.
 
 ## License
 
