@@ -30,9 +30,39 @@ oh-snap runs on Windows 10 and 11. macOS and Linux are not supported yet.
 | Enter | Snips what is highlighted, or the whole monitor |
 | Esc or right click | Cancels |
 
-A snip plays a short shutter sound. It goes to the clipboard as a bitmap and as PNG, and to `Pictures\Screenshots`, the folder that Windows and Photos use. A card in the corner shows the snip and the file name. Click the card to open the image, or click `folder` to show the file in Explorer.
+A snip plays a short shutter sound. It goes to the clipboard as a bitmap and as PNG, and to `Pictures\Screenshots`, the folder that Windows and Photos use. A card in the corner shows the snip and the file name. Click the card to open the image. Click `edit` to draw on it, or `folder` to show the file in Explorer.
 
 ![The card that confirms a snip](docs/card.png)
+
+## Edit
+
+The editor opens from the card, from `oh-snap edit FILE`, or from "Edit with oh-snap" when you right-click a PNG in Explorer.
+
+![The editor with an arrow, a box, a highlight, text and a hidden area](docs/editor.png)
+
+| Key | Tool |
+| --- | --- |
+| `a` | Arrow |
+| `b` | Box |
+| `p` | Pen |
+| `m` | Highlighter |
+| `t` | Text. Click, type, then press Enter. Shift+Enter starts a new line |
+| `h` | Hide: pixelates the area, for passwords and names |
+| `c` | Crop |
+| `1` to `5` | Colour |
+
+Ctrl+Z undoes and Ctrl+Y redoes. Ctrl+C copies the edited snip and Ctrl+S saves it over its file. If you close the window with unsaved edits, oh-snap asks first.
+
+## Add-ons
+
+An add-on is a folder with an `addon.toml` and any program. oh-snap gives it the snip as a PNG. The add-on gives back text for the clipboard, a new image, a link to open, or a message. Run one from the `add-ons` menu in the editor.
+
+Two add-ons come with oh-snap:
+
+- **Copy text** reads the text in the snip with the OCR engine that ships with Windows. Nothing is downloaded.
+- **Copy as data URI** copies the snip as a `data:image/png;base64,` link for HTML, CSS or Markdown.
+
+To write your own, see [docs/addons.md](docs/addons.md).
 
 ## Compared with Snipping Tool
 
@@ -55,9 +85,15 @@ oh-snap                      start in the tray
 oh-snap install              install for this user and take the shortcuts
 oh-snap uninstall            give the shortcuts back to Snipping Tool
 oh-snap capture [region|window|screen] [--rect X,Y,W,H] [--out FILE] [--no-clipboard] [--no-save]
+oh-snap edit FILE            open a PNG in the editor
+oh-snap addons [list]        show the add-ons
+oh-snap addons add FOLDER    copy an add-on folder in
+oh-snap addons remove NAME   delete an add-on
+oh-snap addons run NAME FILE run an add-on on a PNG and print its result
+oh-snap addons folder        print where add-ons live
 oh-snap bench [ROUNDS]       measure capture and overlay speed
 oh-snap bench compare [N]    race Snipping Tool
-oh-snap preview DIR          draw the overlay and the card over a fake desktop into PNG files
+oh-snap preview DIR          draw the overlay, the card and the editor into PNG files
 oh-snap logo DIR             write the logo as SVG, PNG and ICO
 oh-snap quit                 stop the tray process
 ```
@@ -78,6 +114,8 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 - `overlay.rs` draws the frozen desktop with Direct2D at 1 unit for 1 physical pixel. The process is per-monitor DPI aware, so mixed-DPI setups line up.
 - `daemon.rs` uses a low-level keyboard hook to get Win+Shift+S and PrtSc before Explorer does. Win+PrtSc and Alt+PrtSc stay with Windows.
 - `card.rs` shows the result without taking the focus. `sound.rs` makes the shutter sound in code, so no audio file ships.
+- `editor.rs` and `annotate.rs` keep the edits as shapes in image pixels. The window and the export use the same drawing code.
+- `addons.rs` runs each add-on as its own process without a window, and stops it after 60 seconds.
 - `install.rs` writes only to `HKCU` and keeps the old PrtSc setting, so `uninstall` can restore it.
 
 ## Known limits
@@ -90,8 +128,7 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 
 ## Next
 
-- An editor for the snip: arrows, boxes, text, blur and crop.
-- Add-ons that run as their own process and get each snip, such as OCR or upload.
+- Add-ons that run after every snip, not only from the editor.
 - macOS and Linux versions.
 
 ## License

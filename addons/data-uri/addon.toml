@@ -1,0 +1,4 @@
+name = "Copy as data URI"
+description = "Copies the snip as a base64 data: URI for HTML, CSS or Markdown"
+command = "powershell.exe -NoProfile -Command \"'data:image/png;base64,' + [Convert]::ToBase64String([IO.File]::ReadAllBytes('{file}'))\""
+result = "text"

@@ -24,6 +24,8 @@ jobs:
           $run = Start-Process ./target/release/oh-snap.exe -ArgumentList 'preview', 'preview-out' -Wait -PassThru -NoNewWindow
           if ($run.ExitCode -ne 0) { throw "preview exited with $($run.ExitCode)" }
           if (-not (Test-Path preview-out/card-saved.png)) { throw "preview did not render" }
+          $run = Start-Process ./target/release/oh-snap.exe -ArgumentList 'addons', 'run', 'data-uri', 'preview-out/card-saved.png' -Wait -PassThru -NoNewWindow -RedirectStandardOutput addon-out.txt
+          if ($run.ExitCode -ne 0 -or -not ((Get-Content addon-out.txt -Raw) -like 'data:image/png;base64,*')) { throw "data-uri add-on failed" }
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')

@@ -25,6 +25,7 @@ const STATE_KEY: &str = r"Software\oh-snap";
 const PRINT_SCREEN_BACKUP: &str = "PrintScreenBackup";
 const NO_PREVIOUS_VALUE: u32 = u32::MAX;
 const PROTOCOLS: [&str; 2] = ["ms-screenclip", "oh-snap"];
+const PNG_EDIT_KEY: &str = r"Software\Classes\SystemFileAssociations\.png\shell\oh-snap.edit";
 
 type InstallResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -51,6 +52,12 @@ pub fn install() -> InstallResult {
         set_string(&format!(r"{class_key}\shell\open\command"), "", &format!("\"{exe}\" \"%1\""))?;
     }
 
+    // "Edit with oh-snap" on every PNG's right-click menu.
+    set_string(PNG_EDIT_KEY, "", "Edit with oh-snap")?;
+    set_string(PNG_EDIT_KEY, "Icon", &icon.display().to_string())?;
+    set_string(&format!(r"{PNG_EDIT_KEY}\command"), "", &format!("\"{exe}\" edit \"%1\""))?;
+    crate::addons::install_bundled()?;
+
     std::process::Command::new(&installed_exe).arg("daemon").spawn()?;
     add_to_user_path(&install_folder())?;
     println!("installed to {exe}");
@@ -75,6 +82,7 @@ pub fn uninstall() -> InstallResult {
         }
     }
     delete_tree(STATE_KEY);
+    delete_tree(PNG_EDIT_KEY);
     let _ = std::fs::remove_file(start_menu_shortcut());
     println!("uninstalled; Snipping Tool has its shortcuts back");
     println!("the program files stay in {}", install_folder().display());

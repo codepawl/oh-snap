@@ -24,7 +24,8 @@ use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, DWriteCreateFactory,
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory,
     IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Dwm::{
@@ -92,6 +93,17 @@ impl Graphics {
         let dwrite: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
         let family = pick_mono_font(&dwrite);
         let label_format = create_format(&dwrite, family, style::LABEL_SIZE)?;
+        // Labels stay on one line; text that does not fit ends in "…".
+        unsafe {
+            label_format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+            let ellipsis = dwrite.CreateEllipsisTrimmingSign(&label_format)?;
+            let trimming = DWRITE_TRIMMING {
+                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                delimiter: 0,
+                delimiterCount: 0,
+            };
+            label_format.SetTrimming(&trimming, &ellipsis)?;
+        }
         let spark_format = create_format(&dwrite, "Segoe UI Symbol", style::SPARK_SIZE)?;
         unsafe {
             spark_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;

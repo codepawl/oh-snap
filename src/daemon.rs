@@ -194,6 +194,10 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
 
 impl Daemon {
     fn run_command(&mut self, hwnd: HWND, command: &str) {
+        if let Some(path) = command.strip_prefix("edit ") {
+            open_editor(&self.graphics, std::path::PathBuf::from(path));
+            return;
+        }
         let mut words = command.split_whitespace();
         match words.next() {
             Some("capture") => {
@@ -440,5 +444,15 @@ fn cursor_area() -> PixelRect {
         top: cursor.y,
         width: 1,
         height: 1,
+    }
+}
+
+/// Opens a saved snip in the editor, inside this process; errors go to the log.
+pub fn open_editor(graphics: &Graphics, path: std::path::PathBuf) {
+    let opened = crate::image_file::load_png(&path)
+        .map_err(|error| error.to_string())
+        .and_then(|image| crate::editor::open(graphics, image, Some(path.clone()), false).map_err(|error| error.to_string()));
+    if let Err(error) = opened {
+        crate::log::write(&format!("could not edit {}: {error}", path.display()));
     }
 }

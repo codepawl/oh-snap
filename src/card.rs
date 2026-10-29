@@ -68,6 +68,7 @@ struct CardState {
 enum Action {
     OpenFile,
     OpenFolder,
+    Edit,
 }
 
 static mut CURRENT_CARD: HWND = HWND(std::ptr::null_mut());
@@ -357,6 +358,7 @@ impl CardState {
                     let select = format!("/select,\"{}\"", path.display());
                     ShellExecuteW(None, w!("open"), w!("explorer.exe"), &HSTRING::from(select), None, SW_SHOWNORMAL);
                 }
+                Action::Edit => crate::daemon::open_editor(self.graphics(), path.to_path_buf()),
             }
         }
     }
@@ -414,20 +416,23 @@ impl CardState {
                 self.text(&target, headline, PADDING + 16.0, line_top, &text);
                 if let Some(path) = path {
                     let file_name = path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
-                    let folder_label = "folder";
-                    let (label_width, _) = self.graphics().measure(folder_label);
-                    let button = D2D_RECT_F {
-                        left: width - PADDING - label_width - 12.0,
-                        top: line_top - 3.0,
-                        right: width - PADDING,
-                        bottom: line_top + LINE_HEIGHT + 1.0,
-                    };
-                    if self.hovered_action == Some(Action::OpenFolder) {
-                        let shape = D2D1_ROUNDED_RECT { rect: button, radiusX: 4.0, radiusY: 4.0 };
-                        unsafe { target.FillRoundedRectangle(&shape, &hover) };
+                    let mut right = width - PADDING;
+                    for (action, label) in [(Action::OpenFolder, "folder"), (Action::Edit, "edit")] {
+                        let (label_width, _) = self.graphics().measure(label);
+                        let button = D2D_RECT_F {
+                            left: right - label_width - 12.0,
+                            top: line_top - 3.0,
+                            right,
+                            bottom: line_top + LINE_HEIGHT + 1.0,
+                        };
+                        if self.hovered_action == Some(action) {
+                            let shape = D2D1_ROUNDED_RECT { rect: button, radiusX: 4.0, radiusY: 4.0 };
+                            unsafe { target.FillRoundedRectangle(&shape, &hover) };
+                        }
+                        self.text(&target, label, button.left + 6.0, line_top, &accent);
+                        buttons.push((action, button));
+                        right = button.left - 2.0;
                     }
-                    self.text(&target, folder_label, button.left + 6.0, line_top, &accent);
-                    buttons.push((Action::OpenFolder, button));
                     self.text(&target, &file_name, PADDING + 16.0, line_top + LINE_HEIGHT, &dim);
                 }
             }

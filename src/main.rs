@@ -1,10 +1,14 @@
 #![windows_subsystem = "windows"]
 
+mod addons;
+mod annotate;
 mod bench;
 mod card;
 mod compare;
 mod capture;
 mod daemon;
+mod editor;
+mod image_file;
 mod install;
 mod log;
 mod logo;
@@ -60,6 +64,17 @@ fn dispatch(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         None | Some("daemon") => Ok(daemon::run()?),
         Some("capture") => capture_command(&arguments[1..]),
         Some("install") => install::install(),
+        Some("edit") => {
+            let path = arguments.get(1).ok_or("edit needs a PNG file")?;
+            let path = std::path::absolute(path)?;
+            // The tray process opens it so the window shares its warm graphics.
+            if let Some(daemon) = daemon::find_running() {
+                daemon::send_command(daemon, &format!("edit {}", path.display()));
+                return Ok(());
+            }
+            editor::run_standalone(path)
+        }
+        Some("addons") => addons::command(&arguments[1..]),
         Some("uninstall") => install::uninstall(),
         Some("logo") => {
             unsafe {

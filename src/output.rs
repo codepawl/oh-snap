@@ -9,7 +9,7 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
-use windows::Win32::System::Ole::CF_DIB;
+use windows::Win32::System::Ole::{CF_DIB, CF_UNICODETEXT};
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::Shell::{FOLDERID_Screenshots, KF_FLAG_CREATE, SHGetKnownFolderPath};
 use windows::core::{Result, w};
@@ -121,6 +121,18 @@ unsafe fn fill_clipboard(dib: &[u8], png_bytes: &[u8]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Puts plain text on the clipboard, for add-ons such as OCR.
+pub fn copy_text_to_clipboard(owner: Option<HWND>, text: &str) -> Result<()> {
+    let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let bytes = unsafe { std::slice::from_raw_parts(utf16.as_ptr() as *const u8, utf16.len() * 2) };
+    open_clipboard_with_retry(owner)?;
+    let result = unsafe {
+        EmptyClipboard().and_then(|()| set_clipboard_bytes(CF_UNICODETEXT.0 as u32, bytes))
+    };
+    unsafe { CloseClipboard()? };
+    result
 }
 
 fn open_clipboard_with_retry(owner: Option<HWND>) -> Result<()> {

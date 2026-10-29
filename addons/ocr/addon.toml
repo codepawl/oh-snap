@@ -1,0 +1,4 @@
+name = "Copy text"
+description = "Reads the text in the snip with Windows OCR and copies it"
+command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ocr.ps1 \"{file}\""
+result = "text"

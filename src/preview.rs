@@ -50,6 +50,7 @@ pub fn run(folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
         copied: true,
         path: Some(PathBuf::from(r"C:\Users\you\Pictures\Screenshots\Screenshot 2026-10-29 201500.png")),
     };
+    write_editor_previews(&graphics, &snipped, folder)?;
     let failed = CardMessage::Failed("the selected area is off screen".into());
     for (name, image, message) in [("card-saved", Some(&snipped), saved), ("card-failed", None, failed)] {
         let (pixels, width, height) = card::render_offscreen(&graphics, image, message)?;
@@ -127,4 +128,61 @@ fn put(pixels: &mut [u8], x: i32, y: i32, rgb: [u8; 3]) {
     pixels[offset + 1] = rgb[1];
     pixels[offset + 2] = rgb[0];
     pixels[offset + 3] = 255;
+}
+
+/// The editor with one of each annotation, and again with the add-ons menu open.
+fn write_editor_previews(graphics: &Graphics, snipped: &Image, folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::annotate::{Annotation, Tool};
+    use crate::editor::{self, EditorScene};
+    use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
+
+    crate::addons::install_bundled()?;
+    let annotations = vec![
+        Annotation::Hide { rect: D2D_RECT_F { left: 190.0, top: 160.0, right: 560.0, bottom: 210.0 } },
+        Annotation::Box { rect: D2D_RECT_F { left: 180.0, top: 50.0, right: 600.0, bottom: 130.0 }, color: 0, width: 4.0 },
+        Annotation::Arrow { from: (660.0, 330.0), to: (520.0, 248.0), color: 1, width: 4.0 },
+        Annotation::Stroke {
+            points: vec![(190.0, 288.0), (330.0, 286.0), (470.0, 289.0)],
+            color: 2,
+            width: 4.0,
+            marker: true,
+        },
+        Annotation::Text { at: (420.0, 340.0), text: "ship this".into(), color: 1, size: 28.0 },
+    ];
+    // What copy, save and add-ons get: the edits flattened into the snip, cropped.
+    let mut cropped = annotations.clone();
+    cropped.push(Annotation::Crop { rect: D2D_RECT_F { left: 160.0, top: 30.0, right: 700.0, bottom: 400.0 } });
+    let hidden = crate::annotate::pixelate(snipped);
+    let flattened = crate::annotate::compose(graphics, snipped, &hidden, &cropped)?;
+    let flattened_path = folder.join("editor-flattened.png");
+    output::write_png_to(&output::encode_png(&flattened)?, &flattened_path)?;
+    let reread = crate::image_file::load_png(&flattened_path)?;
+    if (reread.width, reread.height) != (540, 370) || reread.bgra != flattened.bgra {
+        return Err(format!("flattened PNG did not round-trip: {}x{}", reread.width, reread.height).into());
+    }
+    println!("{}", flattened_path.display());
+
+    let scenes = [
+        ("editor", false, Some("copied".to_string()), (900.0, 400.0)),
+        ("editor-addons", true, None, (1180.0, 105.0)),
+    ];
+    for (name, menu_open, status_text, pointer) in scenes {
+        let scene = EditorScene {
+            annotations: annotations.clone(),
+            tool: Tool::Arrow,
+            menu_open,
+            status_text,
+            pointer,
+        };
+        let copy = Image {
+            width: snipped.width,
+            height: snipped.height,
+            bgra: snipped.bgra.clone(),
+        };
+        let (pixels, width, height) = editor::render_offscreen(graphics, copy, scene)?;
+        let path = folder.join(format!("{name}.png"));
+        output::write_png_to(&output::encode_png(&Image { width, height, bgra: pixels })?, &path)?;
+        println!("{}", path.display());
+    }
+    Ok(())
 }
