@@ -2,7 +2,7 @@
 
 # oh-snap
 
-A fast screen snipping tool for Windows, written in Rust. It replaces Snipping Tool for PrtSc, Win+Shift+S and `ms-screenclip:` links. The program is one file of about 0.7 MB.
+A fast screen snipping tool for Windows, written in Rust. It replaces Snipping Tool for PrtSc, Win+Shift+S and `ms-screenclip:` links. The program is one file of about 0.8 MB.
 
 ![The oh-snap overlay over a desktop](docs/overlay.png)
 
@@ -103,7 +103,7 @@ Measured with `oh-snap bench compare 6` on Windows 11 build 26300, two 1920x1080
 | Screen dims (median) | 44 ms | 309 ms |
 | First snip after start | 47 ms | 801 ms |
 | Memory, working set | 84 MB in 1 process | 392 MB in 2 processes |
-| Size on disk | 0.7 MB | 586 MB |
+| Size on disk | 0.8 MB | 586 MB |
 
 Run the same test on your computer with `oh-snap bench compare`. It opens and closes both overlays a few times.
 
