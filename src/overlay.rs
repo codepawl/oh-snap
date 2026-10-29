@@ -46,12 +46,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, IDC_ARROW, IDC_CROSS, IsIconic, IsWindowVisible, LoadCursorW, MSG,
     SW_SHOW, SetCursor, SetCursorPos, SetForegroundWindow, SetWindowLongPtrW, ShowWindow,
     TranslateMessage, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
-    WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, KillTimer, SetTimer,
     WS_POPUP, RegisterClassExW,
 };
 use windows::core::{BOOL, HSTRING, Interface, Result, w};
 
 use crate::capture::{PixelRect, Screenshot};
+use crate::particles::ParticleSystem;
 use crate::style;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +181,7 @@ pub struct OverlayOptions {
     pub start_mode: Mode,
     /// For the benchmark: close right after the first frame is on screen.
     pub close_after_first_frame: bool,
+    pub particles: bool,
 }
 
 pub struct OverlayOutcome {
@@ -216,7 +218,13 @@ struct OverlayState {
     done: bool,
     close_after_first_frame: bool,
     first_frame_at: Option<Instant>,
+    /// None when the user turned the effect off.
+    particles: Option<ParticleSystem>,
+    particle_brush: ID2D1SolidColorBrush,
+    timer_running: bool,
 }
+
+const PARTICLE_TIMER: usize = 7;
 
 /// Shows the overlay and blocks until the user picks an area or cancels.
 pub fn select_area(graphics: &Graphics, screenshot: &Screenshot, options: OverlayOptions) -> Result<OverlayOutcome> {
@@ -256,6 +264,9 @@ pub fn select_area(graphics: &Graphics, screenshot: &Screenshot, options: Overla
     let cursor = (cursor_point.x, cursor_point.y);
     let mut state = OverlayState::new(graphics, screenshot, target, window_rects, options.start_mode, cursor)?;
     state.close_after_first_frame = options.close_after_first_frame;
+    if options.particles {
+        state.particles = Some(ParticleSystem::new(cursor.0 as u32 ^ (cursor.1 as u32).rotate_left(16)));
+    }
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, &mut state as *mut OverlayState as isize) };
 
     unsafe {
@@ -341,6 +352,8 @@ pub struct PreviewScene {
     pub cursor: (i32, i32),
     pub drag_from: Option<(i32, i32)>,
     pub window_rects: Vec<PixelRect>,
+    /// Pointer positions to replay as a drag, about 16 ms apart, for the particles.
+    pub trail: Vec<(i32, i32)>,
 }
 
 /// Draws the overlay into memory and returns BGRA pixels the size of the screenshot.
@@ -366,6 +379,16 @@ pub fn render_offscreen(graphics: &Graphics, screenshot: &Screenshot, scene: Pre
     let mut state = OverlayState::new(graphics, screenshot, target, scene.window_rects, scene.mode, scene.cursor)?;
     state.press_point = scene.drag_from;
     state.dragging = scene.drag_from.is_some();
+    if !scene.trail.is_empty() {
+        let mut particles = ParticleSystem::new(0x5EED);
+        for point in &scene.trail {
+            let client = state.to_client(point.0, point.1);
+            let pixel = screenshot.pixel_at(point.0, point.1).unwrap_or([128, 128, 128]);
+            particles.trail(client, pixel);
+            particles.advance(0.016);
+        }
+        state.particles = Some(particles);
+    }
     state.paint();
 
     let stride = width * 4;
@@ -492,6 +515,22 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, message: u32, wparam: WPARAM,
                     state.dragging = true;
                 }
             }
+            if state.dragging {
+                state.trail_particles(hwnd);
+            }
+            state.paint();
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == PARTICLE_TIMER => {
+            if let Some(particles) = state.particles.as_mut() {
+                particles.update();
+                if particles.is_empty() {
+                    unsafe {
+                        let _ = KillTimer(Some(hwnd), PARTICLE_TIMER);
+                    }
+                    state.timer_running = false;
+                }
+            }
             state.paint();
             LRESULT(0)
         }
@@ -540,6 +579,7 @@ impl OverlayState {
         let bitmap = create_screen_bitmap(&target, screenshot)?;
         let brushes = create_brushes(&target)?;
         let dash = create_dash(graphics)?;
+        let target_for_brush = target.clone();
         Ok(Self {
             graphics,
             screenshot,
@@ -557,7 +597,24 @@ impl OverlayState {
             done: false,
             close_after_first_frame: false,
             first_frame_at: None,
+            particles: None,
+            particle_brush: unsafe { target_for_brush.CreateSolidColorBrush(&style::TEXT, None)? },
+            timer_running: false,
         })
+    }
+
+    /// Breaks bits off the pointer and keeps a ~60 fps timer running while any fly.
+    fn trail_particles(&mut self, hwnd: HWND) {
+        let point = self.to_client(self.cursor.0, self.cursor.1);
+        let pixel = self.screenshot().pixel_at(self.cursor.0, self.cursor.1).unwrap_or([128, 128, 128]);
+        let Some(particles) = self.particles.as_mut() else {
+            return;
+        };
+        particles.trail(point, pixel);
+        if !self.timer_running && !particles.is_empty() {
+            unsafe { SetTimer(Some(hwnd), PARTICLE_TIMER, 15, None) };
+            self.timer_running = true;
+        }
     }
 
     fn graphics(&self) -> &Graphics {
@@ -697,6 +754,9 @@ impl OverlayState {
             self.toolbar_hits.clear();
         } else {
             self.draw_toolbar();
+        }
+        if let Some(particles) = &self.particles {
+            particles.draw(&self.target, &self.particle_brush, &self.graphics().label_format);
         }
         self.draw_loupe();
         unsafe {

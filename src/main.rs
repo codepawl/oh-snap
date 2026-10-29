@@ -5,6 +5,7 @@ mod annotate;
 mod bench;
 mod card;
 mod compare;
+mod confirm;
 mod capture;
 mod daemon;
 mod editor;
@@ -13,9 +14,11 @@ mod install;
 mod log;
 mod logo;
 mod output;
+mod particles;
 mod overlay;
 mod preview;
 mod snip;
+mod settings;
 mod sound;
 mod style;
 
@@ -129,7 +132,8 @@ fn capture_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error
         clipboard: true,
         save_to_folder: true,
         output_path: None,
-        shutter_sound: true,
+        shutter_sound: settings::load().shutter_sound,
+        particles: settings::load().particles,
     };
     let mut index = 0;
     while index < arguments.len() {

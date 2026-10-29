@@ -20,7 +20,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CallNextHookEx, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DispatchMessageW, FindWindowExW, GetCursorPos, GetMessageW, GetSystemMetrics, SM_CXSMICON, HHOOK, HICON, HWND_MESSAGE, KBDLLHOOKSTRUCT,
-    LLKHF_INJECTED, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
+    LLKHF_INJECTED, MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
     RegisterWindowMessageW, SW_SHOWNORMAL, SendMessageW, SetForegroundWindow, SetWindowsHookExW,
     TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx,
     WH_KEYBOARD_LL, WM_APP, WM_COPYDATA, WM_KEYDOWN, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYDOWN, WNDCLASSEXW,
@@ -30,6 +30,8 @@ use windows::core::{HSTRING, PCWSTR, Result, w};
 use crate::capture::Capturer;
 use crate::overlay::{Graphics, Mode};
 use crate::card::CardMessage;
+use crate::confirm::Choice;
+use crate::settings::Settings;
 use crate::snip::{self, SnipRequest};
 use crate::capture::PixelRect;
 
@@ -43,6 +45,9 @@ const MENU_WINDOW: usize = 2;
 const MENU_SCREEN: usize = 3;
 const MENU_FOLDER: usize = 4;
 const MENU_QUIT: usize = 5;
+const MENU_CONFIRM: usize = 6;
+const MENU_PARTICLES: usize = 7;
+const MENU_SOUND: usize = 8;
 
 static DAEMON_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static SWALLOWING_S: AtomicBool = AtomicBool::new(false);
@@ -52,6 +57,7 @@ struct Daemon {
     capturer: Option<Capturer>,
     graphics: Graphics,
     busy: bool,
+    settings: Settings,
     taskbar_created: u32,
     icon: HICON,
 }
@@ -106,6 +112,7 @@ pub fn run() -> Result<()> {
         capturer: Capturer::new().ok(),
         graphics,
         busy: false,
+        settings: crate::settings::load(),
         taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
         icon,
     };
@@ -222,35 +229,12 @@ impl Daemon {
         if self.capturer.is_none() {
             self.capturer = Capturer::new().ok();
         }
-        if let Some(capturer) = self.capturer.as_mut() {
-            let request = SnipRequest {
-                mode,
-                clipboard: true,
-                save_to_folder: true,
-                output_path: None,
-                shutter_sound: true,
-            };
-            match snip::run(capturer, &self.graphics, Some(hwnd), &request) {
-                Ok(Some(outcome)) => {
-                    let message = CardMessage::Saved {
-                        copied: outcome.copied,
-                        path: outcome.saved_to,
-                    };
-                    let shown = crate::card::show(&self.graphics, Some(&outcome.image), message, outcome.area);
-                    if let Err(error) = shown {
-                        crate::log::write(&format!("card failed: {error}"));
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    crate::log::write(&format!("snip failed: {error}"));
-                    let cursor_area = cursor_area();
-                    let message = CardMessage::Failed(error.to_string());
-                    let _ = crate::card::show(&self.graphics, None, message, cursor_area);
-                    // A broken duplication is rebuilt on the next snip.
-                    self.capturer = None;
-                }
-            }
+        if let Err(error) = self.snip_until_decided(hwnd, mode) {
+            crate::log::write(&format!("snip failed: {error}"));
+            let message = CardMessage::Failed(error.to_string());
+            let _ = crate::card::show(&self.graphics, None, message, cursor_area());
+            // A broken duplication is rebuilt on the next snip.
+            self.capturer = None;
         }
         if let Some(capturer) = self.capturer.as_mut() {
             capturer.release_cpu_memory();
@@ -258,15 +242,72 @@ impl Daemon {
         self.busy = false;
     }
 
+    /// Overlay, then (unless switched off) "keep this snip?", until the user saves,
+    /// edits or cancels. Retake goes round again with a fresh capture.
+    fn snip_until_decided(&mut self, hwnd: HWND, mode: Mode) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let Some(capturer) = self.capturer.as_mut() else {
+            return Err("no screen capture device".into());
+        };
+        loop {
+            let request = SnipRequest {
+                mode,
+                clipboard: true,
+                save_to_folder: true,
+                output_path: None,
+                shutter_sound: self.settings.shutter_sound,
+                particles: self.settings.particles,
+            };
+            let Some(area) = snip::pick(capturer, &self.graphics, &request)? else {
+                return Ok(());
+            };
+            if self.settings.confirm_before_save {
+                let image = snip::crop(capturer, area)?;
+                let answer = crate::confirm::ask(&self.graphics, &image, area)?;
+                if answer.stop_asking {
+                    self.settings.confirm_before_save = false;
+                    crate::settings::save(&self.settings);
+                }
+                match answer.choice {
+                    Choice::Save => {}
+                    Choice::Edit => {
+                        crate::editor::open(&self.graphics, image, None, false)?;
+                        return Ok(());
+                    }
+                    Choice::Retake => {
+                        // Give DWM a frame to take the dialog off the screen.
+                        std::thread::sleep(std::time::Duration::from_millis(60));
+                        continue;
+                    }
+                    Choice::Cancel => return Ok(()),
+                }
+            }
+            let outcome = snip::deliver(capturer, Some(hwnd), &request, area)?;
+            let message = CardMessage::Saved {
+                copied: outcome.copied,
+                path: outcome.saved_to,
+            };
+            if let Err(error) = crate::card::show(&self.graphics, Some(&outcome.image), message, outcome.area) {
+                crate::log::write(&format!("card failed: {error}"));
+            }
+            return Ok(());
+        }
+    }
+
     fn show_menu(&mut self, hwnd: HWND) {
         let Ok(menu) = (unsafe { CreatePopupMenu() }) else {
             return;
         };
+        let checked = |on: bool| if on { MF_STRING | MF_CHECKED } else { MF_STRING };
         unsafe {
             let _ = AppendMenuW(menu, MF_STRING, MENU_REGION, w!("snip region\tPrtSc"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_WINDOW, w!("snip window"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_SCREEN, w!("snip screen"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_FOLDER, w!("open screenshots"));
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            let _ = AppendMenuW(menu, checked(self.settings.confirm_before_save), MENU_CONFIRM, w!("ask before saving"));
+            let _ = AppendMenuW(menu, checked(self.settings.particles), MENU_PARTICLES, w!("drag particles"));
+            let _ = AppendMenuW(menu, checked(self.settings.shutter_sound), MENU_SOUND, w!("shutter sound"));
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("quit"));
             let mut cursor = POINT::default();
             let _ = GetCursorPos(&mut cursor);
@@ -287,10 +328,19 @@ impl Daemon {
                 MENU_WINDOW => self.snip(hwnd, Mode::Window),
                 MENU_SCREEN => self.snip(hwnd, Mode::Screen),
                 MENU_FOLDER => open_folder(&crate::output::screenshots_folder()),
+                MENU_CONFIRM => self.toggle(|settings| &mut settings.confirm_before_save),
+                MENU_PARTICLES => self.toggle(|settings| &mut settings.particles),
+                MENU_SOUND => self.toggle(|settings| &mut settings.shutter_sound),
                 MENU_QUIT => PostQuitMessage(0),
                 _ => {}
             }
         }
+    }
+
+    fn toggle(&mut self, field: impl Fn(&mut Settings) -> &mut bool) {
+        let value = field(&mut self.settings);
+        *value = !*value;
+        crate::settings::save(&self.settings);
     }
 }
 

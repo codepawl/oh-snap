@@ -28,11 +28,17 @@ pub fn run(folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
     ];
     std::fs::create_dir_all(folder)?;
     for (name, mode, cursor, drag_from) in scenes {
+        // The drag scene replays the pointer path so the particles are mid-flight.
+        let trail = match drag_from {
+            Some(start) => drag_path(start, cursor),
+            None => Vec::new(),
+        };
         let scene = PreviewScene {
             mode,
             cursor,
             drag_from,
             window_rects: windows.clone(),
+            trail,
         };
         let pixels = overlay::render_offscreen(&graphics, &screenshot, scene)?;
         let image = Image {
@@ -51,6 +57,12 @@ pub fn run(folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
         path: Some(PathBuf::from(r"C:\Users\you\Pictures\Screenshots\Screenshot 2026-10-29 201500.png")),
     };
     write_editor_previews(&graphics, &snipped, folder)?;
+    for (name, hovered) in [("confirm", None), ("confirm-hover", Some((560.0, 395.0)))] {
+        let (pixels, width, height) = crate::confirm::render_offscreen(&graphics, &snipped, hovered)?;
+        let path = folder.join(format!("{name}.png"));
+        output::write_png_to(&output::encode_png(&Image { width, height, bgra: pixels })?, &path)?;
+        println!("{}", path.display());
+    }
     let failed = CardMessage::Failed("the selected area is off screen".into());
     for (name, image, message) in [("card-saved", Some(&snipped), saved), ("card-failed", None, failed)] {
         let (pixels, width, height) = card::render_offscreen(&graphics, image, message)?;
@@ -185,4 +197,19 @@ fn write_editor_previews(graphics: &Graphics, snipped: &Image, folder: &Path) ->
         println!("{}", path.display());
     }
     Ok(())
+}
+
+/// A slightly curved pointer path from `start` to `end`, one point per frame.
+fn drag_path(start: (i32, i32), end: (i32, i32)) -> Vec<(i32, i32)> {
+    let steps = 36;
+    (0..=steps)
+        .map(|step| {
+            let progress = step as f32 / steps as f32;
+            let eased = 1.0 - (1.0 - progress).powi(2);
+            let bend = (progress * std::f32::consts::PI).sin() * 40.0;
+            let x = start.0 as f32 + (end.0 - start.0) as f32 * eased + bend;
+            let y = start.1 as f32 + (end.1 - start.1) as f32 * eased - bend * 0.5;
+            (x.round() as i32, y.round() as i32)
+        })
+        .collect()
 }

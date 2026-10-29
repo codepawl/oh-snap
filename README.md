@@ -30,6 +30,14 @@ oh-snap runs on Windows 10 and 11. macOS and Linux are not supported yet.
 | Enter | Snips what is highlighted, or the whole monitor |
 | Esc or right click | Cancels |
 
+While you drag, bits of the screen break off the pointer like mined blocks and fall away.
+
+After you pick an area, oh-snap asks if you want to keep it. Press Enter to save, `e` to edit first, `r` to take it again, or Esc to cancel. If you want speed, tick "don't ask again" and every snip saves at once.
+
+![The dialog that asks to keep the snip](docs/confirm.png)
+
+You can turn the question, the particles and the shutter sound on and off from the tray menu.
+
 A snip plays a short shutter sound. It goes to the clipboard as a bitmap and as PNG, and to `Pictures\Screenshots`, the folder that Windows and Photos use. A card in the corner shows the snip and the file name. Click the card to open the image. Click `edit` to draw on it, or `folder` to show the file in Explorer.
 
 ![The card that confirms a snip](docs/card.png)
