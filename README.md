@@ -16,6 +16,13 @@ irm https://raw.githubusercontent.com/codepawl/oh-snap/main/install.ps1 | iex
 
 The installer puts oh-snap in `%LOCALAPPDATA%\Programs\oh-snap`, adds it to your PATH and the Start menu, and starts it at sign-in. To give the shortcuts back to Snipping Tool, run `oh-snap uninstall`.
 
+You can also download `oh-snap.exe` from [GitHub Releases](https://github.com/codepawl/oh-snap/releases) and run `oh-snap install`, or build it with Cargo:
+
+```text
+cargo install --git https://github.com/codepawl/oh-snap
+oh-snap install
+```
+
 oh-snap runs on Windows 10 and 11. macOS and Linux are not supported yet.
 
 ## Use
