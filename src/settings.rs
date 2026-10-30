@@ -66,7 +66,7 @@ impl Default for Settings {
         Self {
             default_mode: Mode::Region,
             delay_seconds: 0,
-            confirm_before_save: true,
+            confirm_before_save: false,
             snap_to_windows: true,
             show_loupe: true,
             show_crosshair: true,

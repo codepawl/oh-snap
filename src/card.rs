@@ -54,6 +54,10 @@ fn hide_after_ms() -> u32 {
     HIDE_AFTER_MS.load(std::sync::atomic::Ordering::Relaxed)
 }
 const HIDE_TIMER: usize = 1;
+/// Redraws the countdown ring while the card waits to hide.
+const TICK_TIMER: usize = 2;
+const TICK_MILLISECONDS: u32 = 33;
+const RING_RADIUS: f32 = 7.0;
 // Not in the windows crate's WindowsAndMessaging module.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
@@ -78,6 +82,9 @@ struct CardState {
     hovered_action: Option<Action>,
     pointer_inside: bool,
     buttons: Vec<(Action, D2D_RECT_F)>,
+    /// When the hide countdown started; none while the pointer holds the card open.
+    hide_started: Option<std::time::Instant>,
+    hide_after: std::time::Duration,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -153,7 +160,7 @@ pub fn show(graphics: &Graphics, image: Option<&Image>, message: CardMessage, ne
         Some(image) => Some(create_thumbnail(&target, image)?),
         None => None,
     };
-    let state = Box::new(CardState {
+    let mut state = Box::new(CardState {
         graphics,
         target,
         thumbnail,
@@ -168,11 +175,13 @@ pub fn show(graphics: &Graphics, image: Option<&Image>, message: CardMessage, ne
         hovered_action: None,
         pointer_inside: false,
         buttons: Vec::new(),
+        hide_started: None,
+        hide_after: std::time::Duration::from_millis(u64::from(hide_after_ms())),
     });
+    state.start_countdown(hwnd);
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        SetTimer(Some(hwnd), HIDE_TIMER, hide_after_ms(), None);
         CURRENT_CARD = hwnd;
     }
     Ok(())
@@ -301,8 +310,9 @@ unsafe extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lp
                 };
                 unsafe {
                     let _ = TrackMouseEvent(&mut tracking);
-                    let _ = KillTimer(Some(hwnd), HIDE_TIMER);
                 }
+                state.stop_countdown(hwnd);
+                state.paint();
             }
             let hovered = state.action_at(state.to_dips(hwnd, lparam));
             if hovered != state.hovered_action {
@@ -314,8 +324,8 @@ unsafe extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lp
         WM_MOUSELEAVE => {
             state.pointer_inside = false;
             state.hovered_action = None;
+            state.start_countdown(hwnd);
             state.paint();
-            unsafe { SetTimer(Some(hwnd), HIDE_TIMER, hide_after_ms(), None) };
             LRESULT(0)
         }
         WM_LBUTTONUP => {
@@ -338,6 +348,10 @@ unsafe extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lp
             }
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == TICK_TIMER => {
+            state.paint();
+            LRESULT(0)
+        }
         WM_TIMER => {
             unsafe {
                 let _ = DestroyWindow(hwnd);
@@ -349,6 +363,36 @@ unsafe extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lp
 }
 
 impl CardState {
+    /// Starts the time to hide from the full "card_seconds".
+    fn start_countdown(&mut self, hwnd: HWND) {
+        self.hide_started = Some(std::time::Instant::now());
+        let milliseconds = self.hide_after.as_millis() as u32;
+        unsafe {
+            SetTimer(Some(hwnd), HIDE_TIMER, milliseconds, None);
+            SetTimer(Some(hwnd), TICK_TIMER, TICK_MILLISECONDS, None);
+        }
+    }
+
+    /// Holds the card open, for as long as the pointer is on it or a menu is up.
+    fn stop_countdown(&mut self, hwnd: HWND) {
+        self.hide_started = None;
+        unsafe {
+            let _ = KillTimer(Some(hwnd), HIDE_TIMER);
+            let _ = KillTimer(Some(hwnd), TICK_TIMER);
+        }
+    }
+
+    /// The share of the countdown still left, from 1 down to 0; 1 while held open.
+    fn time_left(&self) -> f32 {
+        match self.hide_started {
+            Some(started) => {
+                let fraction = started.elapsed().as_secs_f32() / self.hide_after.as_secs_f32().max(0.001);
+                (1.0 - fraction).clamp(0.0, 1.0)
+            }
+            None => 1.0,
+        }
+    }
+
     fn graphics(&self) -> &Graphics {
         unsafe { &*self.graphics }
     }
@@ -380,12 +424,13 @@ impl CardState {
 
     /// Returns true when the card has done its job and should close.
     fn open_image_menu(&mut self, hwnd: HWND) -> bool {
+        if self.image.is_none() {
+            return false;
+        }
+        self.stop_countdown(hwnd);
         let Some(image) = self.image.as_ref() else {
             return false;
         };
-        unsafe {
-            let _ = KillTimer(Some(hwnd), HIDE_TIMER);
-        }
         let finished = match image_menu::show(hwnd) {
             Some(ImageAction::Copy) => {
                 image_menu::copy(hwnd, image);
@@ -413,7 +458,7 @@ impl CardState {
             None => false,
         };
         if !finished && !self.pointer_inside {
-            unsafe { SetTimer(Some(hwnd), HIDE_TIMER, hide_after_ms(), None) };
+            self.start_countdown(hwnd);
         }
         finished
     }
@@ -530,6 +575,12 @@ impl CardState {
                 self.text(&target, &format!("snipping in {seconds}"), PADDING + 16.0, line_top, &text);
             }
         }
+        if !matches!(self.message, CardMessage::Countdown(_)) {
+            let center = (width - PADDING - RING_RADIUS, PADDING + RING_RADIUS);
+            let held_open = self.hide_started.is_none();
+            let arc_brush = if held_open { &dim } else { &accent };
+            draw_countdown_ring(self.graphics(), &target, center, self.time_left(), &rule, arc_brush);
+        }
         // Anywhere else on the card opens the file.
         buttons.push((
             Action::OpenFile,
@@ -603,12 +654,75 @@ pub fn render_offscreen(graphics: &Graphics, image: Option<&Image>, message: Car
         hovered_action: Some(Action::OpenFolder),
         pointer_inside: true,
         buttons: Vec::new(),
+        // A third of the way through, so the preview shows the ring running.
+        hide_started: std::time::Instant::now().checked_sub(std::time::Duration::from_millis(1700)),
+        hide_after: std::time::Duration::from_millis(5000),
     };
     state.paint();
     let stride = width * 4;
     let mut pixels = vec![0u8; (stride * height) as usize];
     unsafe { bitmap.CopyPixels(std::ptr::null(), stride, &mut pixels)? };
     Ok((pixels, width, height))
+}
+
+/// A ring in the corner that empties clockwise until the card hides. A dark disc keeps it
+/// readable over the thumbnail.
+fn draw_countdown_ring(
+    graphics: &Graphics,
+    target: &ID2D1RenderTarget,
+    center: (f32, f32),
+    time_left: f32,
+    track: &ID2D1SolidColorBrush,
+    arc: &ID2D1SolidColorBrush,
+) {
+    use windows::Win32::Graphics::Direct2D::Common::{D2D_SIZE_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_OPEN};
+    use windows::Win32::Graphics::Direct2D::{
+        D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL, D2D1_ELLIPSE, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+    };
+    use windows_numerics::Vector2;
+    const STROKE: f32 = 2.0;
+    let middle = Vector2 { X: center.0, Y: center.1 };
+    let ring = D2D1_ELLIPSE { point: middle, radiusX: RING_RADIUS, radiusY: RING_RADIUS };
+    let backing = D2D1_ELLIPSE { point: middle, radiusX: RING_RADIUS + 4.0, radiusY: RING_RADIUS + 4.0 };
+    let Ok(ink) = (unsafe { target.CreateSolidColorBrush(&style::INK, None) }) else {
+        return;
+    };
+    unsafe {
+        target.FillEllipse(&backing, &ink);
+        target.DrawEllipse(&ring, track, STROKE, None);
+    }
+    if time_left >= 0.999 {
+        unsafe { target.DrawEllipse(&ring, arc, STROKE, None) };
+        return;
+    }
+    if time_left <= 0.001 {
+        return;
+    }
+    let point_at = |turn: f32| {
+        let angle = turn * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+        Vector2 { X: center.0 + RING_RADIUS * angle.cos(), Y: center.1 + RING_RADIUS * angle.sin() }
+    };
+    let Ok(geometry) = (unsafe { graphics.d2d.CreatePathGeometry() }) else {
+        return;
+    };
+    let Ok(sink) = (unsafe { geometry.Open() }) else {
+        return;
+    };
+    let segment = D2D1_ARC_SEGMENT {
+        point: point_at(time_left),
+        size: D2D_SIZE_F { width: RING_RADIUS, height: RING_RADIUS },
+        rotationAngle: 0.0,
+        sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+        arcSize: if time_left > 0.5 { D2D1_ARC_SIZE_LARGE } else { D2D1_ARC_SIZE_SMALL },
+    };
+    unsafe {
+        sink.BeginFigure(point_at(0.0), D2D1_FIGURE_BEGIN_HOLLOW);
+        sink.AddArc(&segment);
+        sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        if sink.Close().is_ok() {
+            target.DrawGeometry(&geometry, arc, STROKE, None);
+        }
+    }
 }
 
 enum Mark {

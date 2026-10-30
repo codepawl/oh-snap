@@ -59,9 +59,9 @@ Open the settings from the tray menu or with `oh-snap settings`. A change saves 
 
 The settings live in `%APPDATA%\oh-snap\settings.toml`.
 
-A snip plays a short shutter sound. It goes to the clipboard as a bitmap and as PNG, and to `Pictures\Screenshots`, the folder that Windows and Photos use. A card in the corner shows the snip and the file name. Click the card to open the image. Click `edit` to draw on it, or `folder` to show the file in Explorer. Right-click the image on the card or in the "keep this snip?" dialog to copy it, save a copy somewhere else, or edit it.
+A snip plays a short shutter sound. It goes to the clipboard as a bitmap and as PNG, and to `Pictures\Screenshots`, the folder that Windows and Photos use. A card in the corner shows the snip and the file name. The ring in its corner empties until the card closes, and stops while the pointer is on the card. Click the card to open the image. Click `edit` to draw on it, or `folder` to show the file in Explorer. Right-click the image on the card or in the "keep this snip?" dialog to copy it, save a copy somewhere else, or edit it.
 
-The snip is on the clipboard as soon as you release the mouse, also when "ask before saving" is on. The dialog only decides about the file.
+oh-snap saves without asking. Turn on "ask before saving" to get a "keep this snip?" dialog first. The snip is on the clipboard as soon as you release the mouse, also with the dialog on, which only decides about the file.
 
 ![The card that confirms a snip](docs/card.png)
 

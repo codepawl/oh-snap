@@ -1,6 +1,6 @@
 [package]
 name = "oh-snap"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2024"
 description = "A fast screen snipping tool for Windows"
 license = "MIT"
