@@ -21,6 +21,9 @@ mod output;
 mod particles;
 mod pin;
 mod overlay;
+mod gif_export;
+mod recorder;
+mod recording_bar;
 mod preview;
 mod snip;
 mod settings;
@@ -49,6 +52,9 @@ usage
                   [--no-clipboard] [--no-save]
   oh-snap install                  run at sign-in, take PrtSc, Win+Shift+S and ms-screenclip:
   oh-snap uninstall                give them back to Snipping Tool
+  oh-snap record --rect X,Y,W,H [--seconds N] [--fps N] [--no-sound] [--out FILE]
+                                   record an area without any window
+  oh-snap gif FILE                 make a GIF from a recording
   oh-snap text FILE                print the text in a PNG
   oh-snap update                   install the latest release from GitHub
   oh-snap bench [ROUNDS]           measure capture and overlay speed
@@ -76,6 +82,8 @@ fn dispatch(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         None => Ok(daemon::run(false)?),
         Some("daemon") => Ok(daemon::run(arguments.get(1).map(String::as_str) == Some("--after-update"))?),
         Some("update") => updater::command(),
+        Some("record") => record_command(&arguments[1..]),
+        Some("gif") => gif_export::command(arguments.get(1).ok_or("usage: oh-snap gif FILE")?),
         Some("text") => ocr::command(arguments.get(1).ok_or("usage: oh-snap text FILE")?),
         Some("capture") => capture_command(&arguments[1..]),
         Some("install") => install::install(),
@@ -141,6 +149,33 @@ fn dispatch(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(other) => Err(format!("unknown command `{other}`\n\n{HELP}").into()),
     }
+}
+
+fn record_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut area = None;
+    let mut seconds = 10;
+    let mut options = recorder::RecordOptions { frames_per_second: 30, system_sound: true };
+    let mut out = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = arguments[index].as_str();
+        index += 1;
+        if argument == "--no-sound" {
+            options.system_sound = false;
+            continue;
+        }
+        let value = arguments.get(index).ok_or_else(|| format!("{argument} needs a value"))?;
+        index += 1;
+        match argument {
+            "--rect" => area = Some(parse_rect(value)?),
+            "--seconds" => seconds = value.parse()?,
+            "--fps" => options.frames_per_second = value.parse()?,
+            "--out" => out = Some(PathBuf::from(value)),
+            other => return Err(format!("unknown record option `{other}`").into()),
+        }
+    }
+    let area = area.ok_or("record needs --rect X,Y,W,H")?;
+    recorder::command(area, seconds, options, out)
 }
 
 fn capture_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {

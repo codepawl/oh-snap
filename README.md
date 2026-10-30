@@ -53,8 +53,9 @@ Open the settings from the tray menu or with `oh-snap settings`. A change saves 
 | --- | --- |
 | Capture | Default mode, delay of 3, 5 or 10 seconds, ask before saving, snap to windows, loupe, crosshair |
 | Effects | Drag particles: while dragging, at the start and end of the drag, or off. Shutter sound |
-| Shortcuts | PrtSc, Win+Shift+S |
+| Shortcuts | PrtSc, Win+Shift+S, Win+Shift+R |
 | After capture | Copy to clipboard, save to folder, folder, PNG or JPG, result card and how long it stays, open the editor |
+| Recording | Frame rate of 30 or 60, system sound |
 | System | Start at sign-in, updates: install on their own, only tell you, or off. `check now` looks at once |
 
 The settings live in `%APPDATA%\oh-snap\settings.toml`.
@@ -130,8 +131,12 @@ oh-snap logo DIR             write the logo as SVG, PNG and ICO
 oh-snap settings             open the settings
 oh-snap update               install the latest release from GitHub
 oh-snap text FILE            print the text in a PNG
+oh-snap record --rect X,Y,W,H [--seconds N] [--fps N] [--no-sound] [--out FILE]
+oh-snap gif FILE             make a GIF from a recording
 oh-snap quit                 stop the tray process
 ```
+
+Press Win+Shift+R, or `V` on the overlay, to record video. Pick an area, a window or a screen. After a 3 second countdown, a small bar shows the time with pause and stop, and a thin frame marks the area. Windows keeps both out of the video. Press Win+Shift+R again or click the tray icon to stop. The MP4 goes to `Videos\Screen Recordings`, with the pointer and the sound that your computer plays. The card can open the file, show it in Explorer, or make a GIF next to it. You can drag the card's image into another app.
 
 Press `T` on the overlay to read text instead of keeping an image. Pick an area, a window or a screen, and the text goes to the clipboard. It uses the OCR engine in Windows, so it needs no download and takes about 100 ms.
 
@@ -166,6 +171,7 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 - `editor.rs` and `annotate.rs` keep the edits as shapes in image pixels. The window and the export use the same drawing code.
 - `addons.rs` runs each add-on as its own process without a window, and stops it after 60 seconds.
 - `updater.rs` finds the latest tag from where `releases/latest` redirects, so it does not use the GitHub API and its limit of 60 calls an hour. HTTPS goes through WinHTTP and SHA-256 through CNG, both part of Windows.
+- `recorder.rs` takes frames from the same capture device, draws the pointer with GDI, encodes H.264 and AAC with Media Foundation, and gets the system sound from WASAPI loopback. All of these ship with Windows, so the program stays small. `gif_export.rs` decodes the MP4 with Media Foundation and keeps only the pixels that change.
 - `install.rs` writes only to `HKCU` and keeps the old PrtSc setting, so `uninstall` can restore it.
 
 ## Known limits
@@ -179,7 +185,7 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 ## Next
 
 - Add-ons that run after every snip, not only from the editor.
-- Screen recording with GIF export, QR codes.
+- Microphone sound and trimming for recordings, QR codes.
 - macOS and Linux versions, which are coming.
 
 ## License

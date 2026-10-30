@@ -22,6 +22,10 @@ pub const FOLDER: char = '\u{E838}';
 pub const ADD_ONS: char = '\u{E945}';
 
 pub const CAMERA: char = '\u{E722}';
+pub const VIDEO: char = '\u{E714}';
+pub const PLAY: char = '\u{E768}';
+pub const PAUSE: char = '\u{E769}';
+pub const STOP: char = '\u{E71A}';
 pub const PALETTE: char = '\u{E790}';
 pub const KEYBOARD: char = '\u{E765}';
 pub const GEAR: char = '\u{E713}';

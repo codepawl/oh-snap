@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{BOOL, Interface, Result, w};
 
 use crate::overlay::{Graphics, Mode};
-use crate::settings::{self, CARD_SECONDS_CHOICES, DELAY_CHOICES, FileFormat, ParticleMode, Settings, UpdateMode};
+use crate::settings::{self, CARD_SECONDS_CHOICES, DELAY_CHOICES, FileFormat, ParticleMode, RECORD_FRAME_RATES, Settings, UpdateMode};
 use crate::icons;
 use crate::style;
 
@@ -56,6 +56,9 @@ enum Field {
     ShutterSound,
     PrintScreen,
     WinShiftS,
+    WinShiftR,
+    RecordFrameRate,
+    RecordSound,
     CopyToClipboard,
     SaveToFolder,
     Folder,
@@ -131,6 +134,11 @@ fn columns(settings: &Settings) -> [Vec<Section>; 2] {
         folder_actions.push("reset".to_string());
     }
 
+    let frame_rate_choice = (
+        RECORD_FRAME_RATES.iter().map(|rate| format!("{rate} fps")).collect(),
+        RECORD_FRAME_RATES.iter().position(|rate| *rate == settings.record_frames_per_second),
+    );
+
     let left = vec![
         Section {
             icon: icons::CAMERA,
@@ -158,6 +166,7 @@ fn columns(settings: &Settings) -> [Vec<Section>; 2] {
             rows: vec![
                 row(Field::PrintScreen, icons::KEYBOARD, "PrtSc", on_off(settings.use_print_screen)),
                 row(Field::WinShiftS, icons::KEYBOARD, "Win+Shift+S", on_off(settings.use_win_shift_s)),
+                row(Field::WinShiftR, icons::KEYBOARD, "Win+Shift+R", on_off(settings.use_win_shift_r)),
             ],
         },
     ];
@@ -173,6 +182,14 @@ fn columns(settings: &Settings) -> [Vec<Section>; 2] {
                 row(Field::Card, icons::CARD, "Result card", on_off(settings.show_card)),
                 row(Field::CardSeconds, icons::TIMER, "Card stays", card_choice),
                 row(Field::OpenEditor, icons::EDIT, "Open editor", on_off(settings.open_editor)),
+            ],
+        },
+        Section {
+            icon: icons::VIDEO,
+            title: "Recording",
+            rows: vec![
+                row(Field::RecordFrameRate, icons::TIMER, "Frame rate", frame_rate_choice),
+                row(Field::RecordSound, icons::SPEAKER, "System sound", on_off(settings.record_system_sound)),
             ],
         },
         Section {
@@ -476,6 +493,9 @@ impl SettingsWindow {
             Field::ShutterSound => settings.shutter_sound = on,
             Field::PrintScreen => settings.use_print_screen = on,
             Field::WinShiftS => settings.use_win_shift_s = on,
+            Field::WinShiftR => settings.use_win_shift_r = on,
+            Field::RecordFrameRate => settings.record_frames_per_second = RECORD_FRAME_RATES[hit.option],
+            Field::RecordSound => settings.record_system_sound = on,
             Field::CopyToClipboard => settings.copy_to_clipboard = on,
             Field::SaveToFolder => settings.save_to_folder = on,
             Field::Folder if hit.option == 0 => {

@@ -30,7 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use crate::capture::Capturer;
-use crate::overlay::{Graphics, Mode};
+use crate::overlay::{Graphics, Mode, Tool};
 use crate::card::CardMessage;
 use crate::confirm::Choice;
 use crate::settings::{Settings, UpdateMode};
@@ -44,6 +44,8 @@ const MESSAGE_TRAY: u32 = WM_APP + 2;
 const MESSAGE_UPDATE_CHECKED: u32 = WM_APP + 3;
 const MESSAGE_UPDATE_DOWNLOADED: u32 = WM_APP + 4;
 const MESSAGE_TEXT_READ: u32 = WM_APP + 5;
+const MESSAGE_RECORDING_DONE: u32 = WM_APP + 6;
+const MESSAGE_GIF_DONE: u32 = WM_APP + 7;
 const COPYDATA_COMMAND: usize = 0x6F68_736E;
 /// The process hands its memory back to Windows this long after the last snip, setting or
 /// update. Back-to-back snips stay at full speed; the first one after a quiet spell pays
@@ -63,13 +65,16 @@ const MENU_QUIT: usize = 5;
 const MENU_SETTINGS: usize = 6;
 const MENU_UPDATE: usize = 7;
 const MENU_LAST_REGION: usize = 8;
+const MENU_RECORD: usize = 9;
 const MENU_RECENT_FIRST: usize = 100;
 
 static DAEMON_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static SWALLOWING_S: AtomicBool = AtomicBool::new(false);
+static SWALLOWING_R: AtomicBool = AtomicBool::new(false);
 static SWALLOWING_PRINT_SCREEN: AtomicBool = AtomicBool::new(false);
 static USE_PRINT_SCREEN: AtomicBool = AtomicBool::new(true);
 static USE_WIN_SHIFT_S: AtomicBool = AtomicBool::new(true);
+static USE_WIN_SHIFT_R: AtomicBool = AtomicBool::new(true);
 
 struct Daemon {
     capturer: Option<Capturer>,
@@ -84,6 +89,15 @@ struct Daemon {
     icon: HICON,
     /// The area of the last snip, for Shift+PrtSc and "snip last region".
     last_area: Option<PixelRect>,
+    /// The tool the next overlay starts in.
+    next_tool: Tool,
+    recording: Option<ActiveRecording>,
+}
+
+struct ActiveRecording {
+    controls: std::sync::Arc<crate::recorder::Controls>,
+    /// None during the countdown.
+    windows: Option<crate::recording_bar::RecordingWindows>,
 }
 
 /// Returns the running daemon's window, if there is one.
@@ -151,6 +165,8 @@ pub fn run(after_update: bool) -> Result<()> {
         taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
         icon,
         last_area: None,
+        next_tool: Tool::Snip,
+        recording: None,
     };
     let hwnd = unsafe {
         CreateWindowExW(
@@ -218,7 +234,10 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
         return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
     }
     let daemon = unsafe { &mut *daemon_pointer };
-    if matches!(message, MESSAGE_TRIGGER | MESSAGE_TRAY | MESSAGE_UPDATE_CHECKED | MESSAGE_UPDATE_DOWNLOADED | MESSAGE_TEXT_READ | WM_COPYDATA) {
+    if matches!(
+        message,
+        MESSAGE_TRIGGER | MESSAGE_TRAY | MESSAGE_UPDATE_CHECKED | MESSAGE_UPDATE_DOWNLOADED | MESSAGE_TEXT_READ | MESSAGE_RECORDING_DONE | MESSAGE_GIF_DONE | WM_COPYDATA
+    ) {
         schedule_trim(hwnd);
     }
     match message {
@@ -232,18 +251,30 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
             unsafe {
                 let _ = KillTimer(Some(hwnd), TRIM_TIMER);
             }
-            if !daemon.busy {
+            if !daemon.busy && daemon.recording.is_none() {
                 trim_memory();
             }
             LRESULT(0)
         }
         MESSAGE_TRIGGER => {
-            if wparam.0 == LAST_REGION {
+            if wparam.0 == RECORD {
+                daemon.toggle_recording(hwnd);
+            } else if wparam.0 == LAST_REGION {
                 daemon.snip_last_region(hwnd);
             } else {
                 let mode = mode_from_number(wparam.0).unwrap_or(daemon.settings.default_mode);
                 daemon.snip(hwnd, mode, None);
             }
+            LRESULT(0)
+        }
+        MESSAGE_RECORDING_DONE => {
+            let result = unsafe { Box::from_raw(lparam.0 as *mut std::result::Result<crate::recorder::Recording, String>) };
+            daemon.on_recording_done(*result);
+            LRESULT(0)
+        }
+        MESSAGE_GIF_DONE => {
+            let result = unsafe { Box::from_raw(lparam.0 as *mut std::result::Result<std::path::PathBuf, String>) };
+            daemon.on_gif_done(*result);
             LRESULT(0)
         }
         MESSAGE_TEXT_READ => {
@@ -263,7 +294,9 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
         }
         MESSAGE_TRAY => {
             let mouse_event = (lparam.0 & 0xFFFF) as u32;
-            if mouse_event == WM_LBUTTONUP {
+            if mouse_event == WM_LBUTTONUP && daemon.recording.is_some() {
+                daemon.toggle_recording(hwnd);
+            } else if mouse_event == WM_LBUTTONUP {
                 let mode = daemon.settings.default_mode;
                 daemon.snip(hwnd, mode, None);
             } else if mouse_event == WM_RBUTTONUP {
@@ -291,6 +324,10 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
 
 impl Daemon {
     fn run_command(&mut self, hwnd: HWND, command: &str) {
+        if let Some(path) = command.strip_prefix("gif ") {
+            self.start_gif(hwnd, std::path::PathBuf::from(path));
+            return;
+        }
         if let Some(path) = command.strip_prefix("edit ") {
             open_editor(&self.graphics, std::path::PathBuf::from(path));
             return;
@@ -311,6 +348,7 @@ impl Daemon {
             Some("reload-settings") => self.apply_settings(crate::settings::load()),
             Some("settings") => self.open_settings(),
             Some("check-update") => start_update_check(hwnd, true, std::time::Duration::ZERO),
+            Some("record") => self.toggle_recording(hwnd),
             Some("quit") => unsafe { PostQuitMessage(0) },
             _ => {}
         }
@@ -320,6 +358,7 @@ impl Daemon {
     fn apply_settings(&mut self, settings: Settings) {
         USE_PRINT_SCREEN.store(settings.use_print_screen, Ordering::SeqCst);
         USE_WIN_SHIFT_S.store(settings.use_win_shift_s, Ordering::SeqCst);
+        USE_WIN_SHIFT_R.store(settings.use_win_shift_r, Ordering::SeqCst);
         crate::card::set_hide_after(settings.card_seconds);
         // Only a change by the user touches the sign-in entry; `install` writes the first one.
         if self.settings_applied && settings.start_at_sign_in != self.settings.start_at_sign_in {
@@ -344,7 +383,7 @@ impl Daemon {
 
     /// `repeat_area` skips the overlay and the dialog and snips that area of a fresh capture.
     fn snip(&mut self, hwnd: HWND, mode: Mode, repeat_area: Option<PixelRect>) {
-        if self.busy {
+        if self.busy || self.recording.is_some() {
             return;
         }
         self.busy = true;
@@ -408,8 +447,12 @@ impl Daemon {
                     capturer.capture()?;
                     area
                 }
-                None => match snip::pick(capturer, &self.graphics, &request, true)? {
+                None => match snip::pick(capturer, &self.graphics, &request, true, std::mem::replace(&mut self.next_tool, Tool::Snip))? {
                     Some(Picked::Area(area)) => area,
+                    Some(Picked::Record(area)) => {
+                        self.start_recording(hwnd, area);
+                        return Ok(());
+                    }
                     Some(Picked::Text(area)) => {
                         start_reading_text(hwnd, snip::crop(capturer, area)?);
                         return Ok(());
@@ -503,6 +546,117 @@ impl Daemon {
         }
     }
 
+    /// Win+Shift+R, the tray: stops a recording, or opens the overlay ready to record.
+    fn toggle_recording(&mut self, hwnd: HWND) {
+        if let Some(recording) = &self.recording {
+            recording.controls.stop.store(true, Ordering::SeqCst);
+            return;
+        }
+        self.next_tool = Tool::Record;
+        let mode = self.settings.default_mode;
+        self.snip(hwnd, mode, None);
+        self.next_tool = Tool::Snip;
+    }
+
+    /// Gets the engine ready during a countdown, so the recording starts on time, then shows
+    /// the bar and the frame around the area.
+    fn start_recording(&mut self, hwnd: HWND, area: PixelRect) {
+        // The engine needs the capture device: a process can hold only one per monitor.
+        self.capturer = None;
+        let options = crate::recorder::RecordOptions {
+            frames_per_second: self.settings.record_frames_per_second,
+            system_sound: self.settings.record_system_sound,
+        };
+        let window = hwnd.0 as isize;
+        let controls = crate::recorder::start(area, options, move |result| {
+            let result = Box::new(result);
+            unsafe {
+                let _ = PostMessageW(Some(HWND(window as *mut _)), MESSAGE_RECORDING_DONE, WPARAM(0), LPARAM(Box::into_raw(result) as isize));
+            }
+        });
+        self.recording = Some(ActiveRecording {
+            controls: controls.clone(),
+            windows: None,
+        });
+        for remaining in (1..=RECORD_COUNTDOWN_SECONDS).rev() {
+            let _ = crate::card::show(&self.graphics, None, CardMessage::Countdown(remaining), cursor_area());
+            pump_messages_for(std::time::Duration::from_secs(1));
+            if controls.stop.load(Ordering::SeqCst) {
+                crate::card::close_current();
+                return;
+            }
+        }
+        crate::card::close_current();
+        // Give DWM a frame or two to take the card off the screen.
+        pump_messages_for(std::time::Duration::from_millis(80));
+        match crate::recording_bar::open(&self.graphics, controls.clone(), area) {
+            Ok(windows) => {
+                if let Some(recording) = self.recording.as_mut() {
+                    recording.windows = Some(windows);
+                }
+            }
+            Err(error) => crate::log::write(&format!("recording bar failed: {error}")),
+        }
+        controls.go.store(true, Ordering::SeqCst);
+    }
+
+    fn on_recording_done(&mut self, result: std::result::Result<crate::recorder::Recording, String>) {
+        if let Some(recording) = self.recording.take() {
+            if let Some(windows) = recording.windows {
+                windows.close();
+            }
+        }
+        match result {
+            Ok(recording) => {
+                let message = CardMessage::Recorded {
+                    path: recording.path,
+                    milliseconds: recording.duration.as_millis() as u64,
+                };
+                let _ = crate::card::show(&self.graphics, Some(&recording.first_frame), message, cursor_area());
+            }
+            // Stopping during the countdown is not a failure.
+            Err(error) if error.contains("stopped before it started") => {}
+            Err(error) => {
+                crate::log::write(&format!("recording failed: {error}"));
+                let _ = crate::card::show(&self.graphics, None, CardMessage::Failed(format!("recording: {error}")), cursor_area());
+            }
+        }
+        if let Some((version, exe)) = self.pending_update.take() {
+            self.apply_update(version, exe);
+        }
+    }
+
+    fn start_gif(&mut self, hwnd: HWND, recording: std::path::PathBuf) {
+        let message = CardMessage::Notice {
+            title: "making a GIF…".into(),
+            detail: recording.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default(),
+        };
+        let _ = crate::card::show(&self.graphics, None, message, cursor_area());
+        let window = hwnd.0 as isize;
+        std::thread::spawn(move || {
+            let result = Box::new(crate::gif_export::export(&recording));
+            unsafe {
+                let _ = PostMessageW(Some(HWND(window as *mut _)), MESSAGE_GIF_DONE, WPARAM(0), LPARAM(Box::into_raw(result) as isize));
+            }
+        });
+    }
+
+    fn on_gif_done(&mut self, result: std::result::Result<std::path::PathBuf, String>) {
+        crate::card::close_current();
+        let message = match result {
+            Ok(path) => CardMessage::Saved {
+                copied: false,
+                path: Some(path),
+                history: None,
+            },
+            Err(error) => {
+                crate::log::write(&format!("GIF failed: {error}"));
+                CardMessage::Failed(format!("GIF: {error}"))
+            }
+        };
+        let _ = crate::card::show(&self.graphics, None, message, cursor_area());
+    }
+
     /// Text from the overlay's text tool: on the clipboard, with a card that says so.
     fn on_text_read(&mut self, hwnd: HWND, result: std::result::Result<String, String>) {
         let message = match result {
@@ -533,6 +687,8 @@ impl Daemon {
             let _ = AppendMenuW(menu, MF_STRING, MENU_SCREEN, w!("snip screen"));
             let last_region_flags = if self.last_area.is_some() { MF_STRING } else { MF_STRING | MF_GRAYED };
             let _ = AppendMenuW(menu, last_region_flags, MENU_LAST_REGION, w!("snip last region	Shift+PrtSc"));
+            let record_label = if self.recording.is_some() { w!("stop recording") } else { w!("record video\tWin+Shift+R") };
+            let _ = AppendMenuW(menu, MF_STRING, MENU_RECORD, record_label);
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             if let Ok(recent_menu) = CreatePopupMenu() {
                 for (index, path) in recent.iter().enumerate() {
@@ -565,6 +721,7 @@ impl Daemon {
                 MENU_WINDOW => self.snip(hwnd, Mode::Window, None),
                 MENU_SCREEN => self.snip(hwnd, Mode::Screen, None),
                 MENU_LAST_REGION => self.snip_last_region(hwnd),
+                MENU_RECORD => self.toggle_recording(hwnd),
                 chosen if (MENU_RECENT_FIRST..MENU_RECENT_FIRST + recent.len()).contains(&chosen) => {
                     self.open_recent(&recent[chosen - MENU_RECENT_FIRST]);
                 }
@@ -625,6 +782,9 @@ fn open_folder(folder: &std::path::Path) {
 const DEFAULT_MODE: usize = 99;
 /// Posted as the trigger's mode number for Shift+PrtSc: the last area again.
 const LAST_REGION: usize = 98;
+/// Posted as the trigger's mode number for Win+Shift+R.
+const RECORD: usize = 97;
+const RECORD_COUNTDOWN_SECONDS: u32 = 3;
 
 fn mode_number(mode: Mode) -> usize {
     match mode {
@@ -683,6 +843,20 @@ fn should_swallow(virtual_key: u32, key_message: u32) -> bool {
         return SWALLOWING_S.load(Ordering::SeqCst);
     }
 
+    if virtual_key == u32::from(b'R') {
+        let enabled = USE_WIN_SHIFT_R.load(Ordering::SeqCst);
+        if enabled && is_down && windows_key && shift && !control && !alt {
+            if !SWALLOWING_R.swap(true, Ordering::SeqCst) {
+                trigger_from_hook(RECORD);
+            }
+            return true;
+        }
+        if !is_down && SWALLOWING_R.swap(false, Ordering::SeqCst) {
+            return true;
+        }
+        return SWALLOWING_R.load(Ordering::SeqCst);
+    }
+
     if virtual_key == u32::from(VK_SNAPSHOT.0) {
         // Win+PrtSc and Alt+PrtSc stay with Windows.
         let enabled = USE_PRINT_SCREEN.load(Ordering::SeqCst);
@@ -698,6 +872,12 @@ fn should_swallow(virtual_key: u32, key_message: u32) -> bool {
         }
     }
     false
+}
+
+/// Asks the running tray process to make a GIF from a recording; its card does this.
+pub fn make_gif(recording: &std::path::Path) {
+    let hwnd = HWND(DAEMON_WINDOW.load(Ordering::SeqCst) as *mut _);
+    send_command(hwnd, &format!("gif {}", recording.display()));
 }
 
 fn trigger_from_hook(mode_number: usize) {
@@ -826,7 +1006,8 @@ impl Daemon {
 
     fn on_update_downloaded(&mut self, version: String, result: std::result::Result<Vec<u8>, String>) {
         match result {
-            Ok(exe) if self.busy => self.pending_update = Some((version, exe)),
+            // An update restarts the process, which would end a recording.
+            Ok(exe) if self.busy || self.recording.is_some() => self.pending_update = Some((version, exe)),
             Ok(exe) => self.apply_update(version, exe),
             Err(error) => {
                 crate::log::write(&format!("update download failed: {error}"));

@@ -68,6 +68,8 @@ pub enum CardMessage {
     Saved { copied: bool, path: Option<PathBuf>, history: Option<PathBuf> },
     /// A snip from the tray's recent list, put back on the clipboard.
     Recent { path: PathBuf },
+    /// A finished recording, with its first frame as the thumbnail.
+    Recorded { path: PathBuf, milliseconds: u64 },
     /// A colour from the overlay's colour tool, with its hex value on the clipboard.
     Color([u8; 3]),
     Failed(String),
@@ -103,6 +105,7 @@ enum Action {
     OpenFile,
     OpenFolder,
     Edit,
+    Gif,
 }
 
 static mut CURRENT_CARD: HWND = HWND(std::ptr::null_mut());
@@ -372,7 +375,8 @@ unsafe extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lp
         }
         WM_RBUTTONUP => {
             let point = state.to_dips(hwnd, lparam);
-            if state.over_thumbnail(point) && state.open_image_menu(hwnd) {
+            let is_recording = matches!(state.message, CardMessage::Recorded { .. });
+            if !is_recording && state.over_thumbnail(point) && state.open_image_menu(hwnd) {
                 unsafe {
                     let _ = DestroyWindow(hwnd);
                 }
@@ -432,6 +436,7 @@ impl CardState {
         match &self.message {
             CardMessage::Saved { path, .. } => path.as_deref(),
             CardMessage::Recent { path } => Some(path),
+            CardMessage::Recorded { path, .. } => Some(path),
             CardMessage::Failed(_) | CardMessage::Countdown(_) | CardMessage::Notice { .. } | CardMessage::Color(_) => None,
         }
     }
@@ -533,6 +538,7 @@ impl CardState {
                     ShellExecuteW(None, w!("open"), w!("explorer.exe"), &HSTRING::from(select), None, SW_SHOWNORMAL);
                 }
                 Action::Edit => crate::daemon::open_editor(self.graphics(), path.to_path_buf()),
+                Action::Gif => crate::daemon::make_gif(path),
             }
         }
     }
@@ -579,7 +585,7 @@ impl CardState {
 
         let mut buttons = Vec::new();
         match &self.message {
-            CardMessage::Saved { .. } | CardMessage::Recent { .. } => {
+            CardMessage::Saved { .. } | CardMessage::Recent { .. } | CardMessage::Recorded { .. } => {
                 let (headline, path) = match &self.message {
                     CardMessage::Saved { copied, path, .. } => {
                         let headline = match (copied, path.is_some()) {
@@ -591,14 +597,25 @@ impl CardState {
                         (headline, path.as_ref())
                     }
                     CardMessage::Recent { path } => ("copied again", Some(path)),
+                    CardMessage::Recorded { path, .. } => ("recorded", Some(path)),
                     _ => ("", None),
                 };
+                let headline = match &self.message {
+                    CardMessage::Recorded { milliseconds, .. } => format!("recorded · {}", crate::recorder::clock_text(*milliseconds)),
+                    _ => headline.to_string(),
+                };
+                let headline = headline.as_str();
                 draw_mark(&target, Mark::Check, PADDING, line_top, &accent);
                 self.text(&target, headline, PADDING + 16.0, line_top, &text);
                 if let Some(path) = path {
                     let file_name = path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
                     let mut right = width - PADDING;
-                    let actions = [(Action::OpenFolder, crate::icons::FOLDER, "folder"), (Action::Edit, crate::icons::EDIT, "edit")];
+                    let last_action = if matches!(self.message, CardMessage::Recorded { .. }) {
+                        (Action::Gif, crate::icons::IMAGE, "gif")
+                    } else {
+                        (Action::Edit, crate::icons::EDIT, "edit")
+                    };
+                    let actions = [(Action::OpenFolder, crate::icons::FOLDER, "folder"), last_action];
                     for (action, icon, label) in actions {
                         let (label_width, _) = self.graphics().measure(label);
                         let button = D2D_RECT_F {

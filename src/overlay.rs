@@ -80,6 +80,7 @@ pub enum Tool {
     Snip,
     Text,
     Color,
+    Record,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,10 +89,11 @@ enum ToolbarItem {
     Tool(Tool),
 }
 
-const TOOLBAR_ITEMS: [(ToolbarItem, &str, &str); 5] = [
+const TOOLBAR_ITEMS: [(ToolbarItem, &str, &str); 6] = [
     (ToolbarItem::Mode(Mode::Region), "r", "region"),
     (ToolbarItem::Mode(Mode::Window), "w", "window"),
     (ToolbarItem::Mode(Mode::Screen), "s", "screen"),
+    (ToolbarItem::Tool(Tool::Record), "v", "video"),
     (ToolbarItem::Tool(Tool::Text), "t", "text"),
     (ToolbarItem::Tool(Tool::Color), "c", "color"),
 ];
@@ -220,8 +222,9 @@ pub struct OverlayOptions {
     pub show_loupe: bool,
     pub show_crosshair: bool,
     pub snap_to_windows: bool,
-    /// Offers text and colour; the tray process handles those, the plain CLI does not.
+    /// Offers video, text and colour; the tray process handles those, the plain CLI does not.
     pub extra_tools: bool,
+    pub start_tool: Tool,
 }
 
 pub struct OverlayOutcome {
@@ -323,6 +326,7 @@ pub fn select_area(graphics: &Graphics, screenshot: &Screenshot, options: Overla
     state.show_crosshair = options.show_crosshair;
     state.snap_to_windows = options.snap_to_windows;
     state.extra_tools = options.extra_tools;
+    state.tool = options.start_tool;
     if options.particles != ParticleMode::Off {
         state.particles = Some(ParticleSystem::new(cursor.0 as u32 ^ (cursor.1 as u32).rotate_left(16)));
     }
@@ -822,6 +826,10 @@ impl OverlayState {
             key if key == u16::from(b'R') => self.set_mode(Mode::Region),
             key if key == u16::from(b'W') => self.set_mode(Mode::Window),
             key if key == u16::from(b'S') => self.set_mode(Mode::Screen),
+            key if key == u16::from(b'V') && self.extra_tools => {
+                self.toggle_tool(Tool::Record);
+                self.paint();
+            }
             key if key == u16::from(b'T') && self.extra_tools => {
                 self.toggle_tool(Tool::Text);
                 self.paint();
@@ -1054,7 +1062,7 @@ impl OverlayState {
         let mut hits = Vec::new();
         let mut button_left = bar.left + inset + spark_slot;
         for ((item, key, name), (key_width, name_width, _)) in labels.iter().zip(sizes.iter()) {
-            if *item == ToolbarItem::Tool(Tool::Text) {
+            if *item == ToolbarItem::Tool(Tool::Record) {
                 button_left += tools_gap;
             }
             let button = D2D_RECT_F {
@@ -1081,6 +1089,7 @@ impl OverlayState {
             let icon = match item {
                 ToolbarItem::Mode(mode) => mode_icon(*mode),
                 ToolbarItem::Tool(Tool::Text) => crate::icons::TEXT,
+                ToolbarItem::Tool(Tool::Record) => crate::icons::VIDEO,
                 ToolbarItem::Tool(_) => crate::icons::PALETTE,
             };
             self.graphics().draw_icon(&self.target, icon, icon_area, name_brush);

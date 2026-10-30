@@ -34,6 +34,8 @@ pub enum Picked {
     Text(PixelRect),
     /// A pixel's red, green and blue.
     Color([u8; 3]),
+    /// Record this area.
+    Record(PixelRect),
 }
 
 pub type SnipResult = Result<Option<SnipOutcome>, Box<dyn std::error::Error>>;
@@ -44,6 +46,7 @@ pub fn pick(
     graphics: &Graphics,
     request: &SnipRequest,
     extra_tools: bool,
+    start_tool: Tool,
 ) -> Result<Option<Picked>, Box<dyn std::error::Error>> {
     let screenshot = capturer.capture()?;
     let options = OverlayOptions {
@@ -54,6 +57,7 @@ pub fn pick(
         show_crosshair: request.settings.show_crosshair,
         snap_to_windows: request.settings.snap_to_windows,
         extra_tools,
+        start_tool,
     };
     let outcome = overlay::select_area(graphics, screenshot, options)?;
     if let Some(color) = outcome.color {
@@ -61,16 +65,17 @@ pub fn pick(
     }
     Ok(outcome.selection.map(|area| match outcome.tool {
         Tool::Text => Picked::Text(area),
+        Tool::Record => Picked::Record(area),
         Tool::Snip | Tool::Color => Picked::Area(area),
     }))
 }
 
 /// Pick and deliver in one go, for the CLI; the tray process adds the confirm step.
 pub fn run(capturer: &mut Capturer, graphics: &Graphics, owner: Option<HWND>, request: &SnipRequest) -> SnipResult {
-    match pick(capturer, graphics, request, false)? {
+    match pick(capturer, graphics, request, false, Tool::Snip)? {
         Some(Picked::Area(area)) => deliver(capturer, owner, request, area).map(Some),
-        // The toolbar here offers neither text nor colour.
-        Some(Picked::Text(_) | Picked::Color(_)) | None => Ok(None),
+        // The toolbar here offers only the plain snip.
+        Some(Picked::Text(_) | Picked::Color(_) | Picked::Record(_)) | None => Ok(None),
     }
 }
 

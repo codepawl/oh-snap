@@ -1,12 +1,13 @@
 [package]
 name = "oh-snap"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 description = "A fast screen snipping tool for Windows"
 license = "MIT"
 repository = "https://github.com/codepawl/oh-snap"
 
 [dependencies]
+gif = "0.14"
 jpeg-encoder = "0.7"
 png = "0.18"
 windows-numerics = "0.3"
@@ -33,18 +34,26 @@ features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
     "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_MediaFoundation",
+    "Win32_Media_Multimedia",
+    "Win32_System_Com_StructuredStorage",
     "Win32_Networking_WinHttp",
     "Win32_Security",
     "Win32_Security_Cryptography",
     "Win32_System_Com",
     "Win32_System_Console",
     "Win32_System_DataExchange",
+    # Not called directly. Without it, HRESULT::message() crashes on the GNU toolchain with
+    # llvm-ar as dlltool: measured 5 of 5 crashes against 0 of 5.
+    "Win32_System_Diagnostics_Debug",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_System_Variant",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",

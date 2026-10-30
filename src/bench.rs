@@ -50,6 +50,7 @@ pub fn run(overlay_rounds: usize) -> Result<(), Box<dyn std::error::Error>> {
             show_crosshair: true,
             snap_to_windows: true,
             extra_tools: true,
+            start_tool: crate::overlay::Tool::Snip,
         };
         let outcome = overlay::select_area(&graphics, screenshot, options)?;
         if let Some(first_frame_at) = outcome.first_frame_at {

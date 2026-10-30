@@ -53,11 +53,16 @@ pub struct Settings {
     // Shortcuts
     pub use_print_screen: bool,
     pub use_win_shift_s: bool,
+    pub use_win_shift_r: bool,
+    // Recording
+    pub record_frames_per_second: u32,
+    pub record_system_sound: bool,
     // System
     pub start_at_sign_in: bool,
     pub updates: UpdateMode,
 }
 
+pub const RECORD_FRAME_RATES: [u32; 2] = [30, 60];
 pub const DELAY_CHOICES: [u32; 4] = [0, 3, 5, 10];
 pub const CARD_SECONDS_CHOICES: [u32; 3] = [3, 5, 10];
 
@@ -81,6 +86,9 @@ impl Default for Settings {
             open_editor: false,
             use_print_screen: true,
             use_win_shift_s: true,
+            use_win_shift_r: true,
+            record_frames_per_second: 30,
+            record_system_sound: true,
             start_at_sign_in: true,
             updates: UpdateMode::Auto,
         }
@@ -124,6 +132,11 @@ fn apply(settings: &mut Settings, key: &str, value: &str) {
         "default_mode" => {
             if let Some(mode) = text.and_then(Mode::parse) {
                 settings.default_mode = mode;
+            }
+        }
+        "record_frames_per_second" => {
+            if let Some(rate) = number.filter(|rate| RECORD_FRAME_RATES.contains(rate)) {
+                settings.record_frames_per_second = rate;
             }
         }
         "delay_seconds" => {
@@ -170,6 +183,8 @@ fn apply(settings: &mut Settings, key: &str, value: &str) {
                 "open_editor" => settings.open_editor = enabled,
                 "use_print_screen" => settings.use_print_screen = enabled,
                 "use_win_shift_s" => settings.use_win_shift_s = enabled,
+                "use_win_shift_r" => settings.use_win_shift_r = enabled,
+                "record_system_sound" => settings.record_system_sound = enabled,
                 "start_at_sign_in" => settings.start_at_sign_in = enabled,
                 _ => {}
             }
@@ -231,6 +246,9 @@ pub fn save(settings: &Settings) {
         "# Shortcuts".to_string(),
         format!("use_print_screen = {}", settings.use_print_screen),
         format!("use_win_shift_s = {}", settings.use_win_shift_s),
+        format!("use_win_shift_r = {}", settings.use_win_shift_r),
+        format!("record_frames_per_second = {}", settings.record_frames_per_second),
+        format!("record_system_sound = {}", settings.record_system_sound),
         "# System".to_string(),
         format!("start_at_sign_in = {}", settings.start_at_sign_in),
         format!("updates = \"{updates}\""),
@@ -267,6 +285,9 @@ mod tests {
             open_editor: true,
             use_print_screen: false,
             use_win_shift_s: false,
+            use_win_shift_r: false,
+            record_frames_per_second: 60,
+            record_system_sound: false,
             start_at_sign_in: false,
             updates: UpdateMode::Notify,
         };
