@@ -11,12 +11,14 @@ mod daemon;
 mod editor;
 mod icons;
 mod image_file;
+mod history;
 mod image_menu;
 mod install;
 mod log;
 mod logo;
 mod output;
 mod particles;
+mod pin;
 mod overlay;
 mod preview;
 mod snip;
@@ -40,7 +42,7 @@ oh-snap — fast screen snips
 
 usage
   oh-snap                          start in the tray (same as `daemon`)
-  oh-snap capture [region|window|screen]
+  oh-snap capture [region|window|screen|last]
                   [--rect X,Y,W,H] capture that area without the overlay
                   [--out FILE]     write the PNG there instead of Pictures\\Screenshots
                   [--no-clipboard] [--no-save]
@@ -139,6 +141,12 @@ fn dispatch(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn capture_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if arguments.first().map(String::as_str) == Some("last") {
+        // Only the tray process remembers the last area.
+        let daemon = daemon::find_running().ok_or("`capture last` needs oh-snap running in the tray")?;
+        daemon::send_command(daemon, "capture last");
+        return Ok(());
+    }
     let mut mode = Mode::Region;
     let mut area: Option<PixelRect> = None;
     let mut explicit_mode = None;
@@ -195,7 +203,8 @@ fn capture_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error
             let area = outcome.area;
             match outcome.saved_to {
                 Some(path) => println!("{}x{} -> {}", area.width, area.height, path.display()),
-                None => println!("{}x{} -> clipboard", area.width, area.height),
+                None if outcome.copied => println!("{}x{} -> clipboard", area.width, area.height),
+                None => println!("{}x{} -> recent snips only", area.width, area.height),
             }
         }
         None => println!("cancelled"),

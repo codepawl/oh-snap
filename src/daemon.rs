@@ -21,7 +21,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CallNextHookEx, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DispatchMessageW, FindWindowExW, GetCursorPos, GetMessageW, GetSystemMetrics, SM_CXSMICON, HHOOK, HICON, HWND_MESSAGE, KBDLLHOOKSTRUCT,
-    LLKHF_INJECTED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
+    LLKHF_INJECTED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
     RegisterWindowMessageW, SW_SHOWNORMAL, SendMessageW, SetForegroundWindow, SetWindowsHookExW,
     TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, UnhookWindowsHookEx,
     WH_KEYBOARD_LL, WM_APP, WM_COPYDATA, WM_KEYDOWN, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYDOWN, WNDCLASSEXW,
@@ -61,6 +61,8 @@ const MENU_FOLDER: usize = 4;
 const MENU_QUIT: usize = 5;
 const MENU_SETTINGS: usize = 6;
 const MENU_UPDATE: usize = 7;
+const MENU_LAST_REGION: usize = 8;
+const MENU_RECENT_FIRST: usize = 100;
 
 static DAEMON_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static SWALLOWING_S: AtomicBool = AtomicBool::new(false);
@@ -79,6 +81,8 @@ struct Daemon {
     settings_applied: bool,
     taskbar_created: u32,
     icon: HICON,
+    /// The area of the last snip, for Shift+PrtSc and "snip last region".
+    last_area: Option<PixelRect>,
 }
 
 /// Returns the running daemon's window, if there is one.
@@ -120,8 +124,9 @@ pub fn run(after_update: bool) -> Result<()> {
     crate::updater::clean_up_old_exe();
 
     unsafe {
-        // WIC, used to draw the logo, needs COM.
+        // WIC, used to draw the logo, needs COM; dragging a snip out of the card needs OLE.
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let _ = windows::Win32::System::Ole::OleInitialize(None);
     }
     let instance: HINSTANCE = unsafe { GetModuleHandleW(None)? }.into();
     let class = WNDCLASSEXW {
@@ -144,6 +149,7 @@ pub fn run(after_update: bool) -> Result<()> {
         settings_applied: false,
         taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
         icon,
+        last_area: None,
     };
     let hwnd = unsafe {
         CreateWindowExW(
@@ -231,8 +237,12 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
             LRESULT(0)
         }
         MESSAGE_TRIGGER => {
-            let mode = mode_from_number(wparam.0).unwrap_or(daemon.settings.default_mode);
-            daemon.snip(hwnd, mode);
+            if wparam.0 == LAST_REGION {
+                daemon.snip_last_region(hwnd);
+            } else {
+                let mode = mode_from_number(wparam.0).unwrap_or(daemon.settings.default_mode);
+                daemon.snip(hwnd, mode, None);
+            }
             LRESULT(0)
         }
         MESSAGE_UPDATE_CHECKED => {
@@ -249,7 +259,7 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
             let mouse_event = (lparam.0 & 0xFFFF) as u32;
             if mouse_event == WM_LBUTTONUP {
                 let mode = daemon.settings.default_mode;
-                daemon.snip(hwnd, mode);
+                daemon.snip(hwnd, mode, None);
             } else if mouse_event == WM_RBUTTONUP {
                 daemon.show_menu(hwnd);
             }
@@ -282,8 +292,11 @@ impl Daemon {
         let mut words = command.split_whitespace();
         match words.next() {
             Some("capture") => {
-                let mode = words.next().and_then(Mode::parse);
-                let number = mode.map(mode_number).unwrap_or(DEFAULT_MODE);
+                let word = words.next();
+                let number = match word {
+                    Some("last") => LAST_REGION,
+                    _ => word.and_then(Mode::parse).map(mode_number).unwrap_or(DEFAULT_MODE),
+                };
                 // Answer the sender first; the snip runs from our own queue.
                 unsafe {
                     let _ = PostMessageW(Some(hwnd), MESSAGE_TRIGGER, WPARAM(number), LPARAM(0));
@@ -316,7 +329,15 @@ impl Daemon {
         }
     }
 
-    fn snip(&mut self, hwnd: HWND, mode: Mode) {
+    /// Snips the last area again without the overlay, or picks a new one when there is none.
+    fn snip_last_region(&mut self, hwnd: HWND) {
+        let mode = self.settings.default_mode;
+        let area = self.last_area;
+        self.snip(hwnd, mode, area);
+    }
+
+    /// `repeat_area` skips the overlay and the dialog and snips that area of a fresh capture.
+    fn snip(&mut self, hwnd: HWND, mode: Mode, repeat_area: Option<PixelRect>) {
         if self.busy {
             return;
         }
@@ -327,7 +348,7 @@ impl Daemon {
         if self.capturer.is_none() {
             self.capturer = Capturer::new().ok();
         }
-        if let Err(error) = self.snip_until_decided(hwnd, mode) {
+        if let Err(error) = self.snip_until_decided(hwnd, mode, repeat_area) {
             crate::log::write(&format!("snip failed: {error}"));
             let message = CardMessage::Failed(error.to_string());
             let _ = crate::card::show(&self.graphics, None, message, cursor_area());
@@ -360,7 +381,12 @@ impl Daemon {
 
     /// Overlay, then (unless switched off) "keep this snip?", until the user saves,
     /// edits or cancels. Retake goes round again with a fresh capture.
-    fn snip_until_decided(&mut self, hwnd: HWND, mode: Mode) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn snip_until_decided(
+        &mut self,
+        hwnd: HWND,
+        mode: Mode,
+        mut repeat_area: Option<PixelRect>,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let Some(capturer) = self.capturer.as_mut() else {
             return Err("no screen capture device".into());
         };
@@ -370,11 +396,20 @@ impl Daemon {
                 output_path: None,
                 settings: self.settings.clone(),
             };
-            let Some(area) = snip::pick(capturer, &self.graphics, &request)? else {
-                return Ok(());
+            let repeating = repeat_area.is_some();
+            let area = match repeat_area.take() {
+                Some(area) => {
+                    capturer.capture()?;
+                    area
+                }
+                None => match snip::pick(capturer, &self.graphics, &request)? {
+                    Some(area) => area,
+                    None => return Ok(()),
+                },
             };
+            self.last_area = Some(area);
             let mut request = request;
-            if self.settings.confirm_before_save {
+            if self.settings.confirm_before_save && !repeating {
                 let image = snip::crop(capturer, area)?;
                 // Like Snipping Tool, the snip is on the clipboard once the area is picked;
                 // the dialog only decides about the file.
@@ -404,6 +439,7 @@ impl Daemon {
                             let message = CardMessage::Saved {
                                 copied: self.settings.copy_to_clipboard,
                                 path: answer.saved_as,
+                                history: None,
                             };
                             let _ = crate::card::show(&self.graphics, Some(&image), message, area);
                         }
@@ -419,6 +455,7 @@ impl Daemon {
                 let message = CardMessage::Saved {
                     copied: outcome.copied,
                     path: outcome.saved_to,
+                    history: outcome.history,
                 };
                 if let Err(error) = crate::card::show(&self.graphics, Some(&outcome.image), message, outcome.area) {
                     crate::log::write(&format!("card failed: {error}"));
@@ -428,7 +465,27 @@ impl Daemon {
         }
     }
 
+    /// Puts a recent snip back on the clipboard and shows its card, where it can be pinned,
+    /// dragged out, edited or saved somewhere.
+    fn open_recent(&mut self, path: &std::path::Path) {
+        let image = match crate::image_file::load_png(path) {
+            Ok(image) => image,
+            Err(error) => {
+                crate::log::write(&format!("recent snip {} failed: {error}", path.display()));
+                return;
+            }
+        };
+        let hwnd = HWND(DAEMON_WINDOW.load(Ordering::SeqCst) as *mut _);
+        crate::image_menu::copy(hwnd, &image);
+        crate::card::close_current();
+        let message = CardMessage::Recent { path: path.to_path_buf() };
+        if let Err(error) = crate::card::show(&self.graphics, Some(&image), message, cursor_area()) {
+            crate::log::write(&format!("card failed: {error}"));
+        }
+    }
+
     fn show_menu(&mut self, hwnd: HWND) {
+        let recent: Vec<std::path::PathBuf> = crate::history::list().into_iter().take(crate::history::LISTED).collect();
         let Ok(menu) = (unsafe { CreatePopupMenu() }) else {
             return;
         };
@@ -436,7 +493,16 @@ impl Daemon {
             let _ = AppendMenuW(menu, MF_STRING, MENU_REGION, w!("snip region"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_WINDOW, w!("snip window"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_SCREEN, w!("snip screen"));
+            let last_region_flags = if self.last_area.is_some() { MF_STRING } else { MF_STRING | MF_GRAYED };
+            let _ = AppendMenuW(menu, last_region_flags, MENU_LAST_REGION, w!("snip last region	Shift+PrtSc"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            if let Ok(recent_menu) = CreatePopupMenu() {
+                for (index, path) in recent.iter().enumerate() {
+                    let _ = AppendMenuW(recent_menu, MF_STRING, MENU_RECENT_FIRST + index, &HSTRING::from(crate::history::label(path)));
+                }
+                let recent_flags = if recent.is_empty() { MF_POPUP | MF_GRAYED } else { MF_POPUP };
+                let _ = AppendMenuW(menu, recent_flags, recent_menu.0 as usize, w!("recent snips"));
+            }
             let _ = AppendMenuW(menu, MF_STRING, MENU_FOLDER, w!("open screenshots"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("settings…"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_UPDATE, w!("check for updates"));
@@ -457,9 +523,13 @@ impl Daemon {
             );
             let _ = DestroyMenu(menu);
             match chosen.0 as usize {
-                MENU_REGION => self.snip(hwnd, Mode::Region),
-                MENU_WINDOW => self.snip(hwnd, Mode::Window),
-                MENU_SCREEN => self.snip(hwnd, Mode::Screen),
+                MENU_REGION => self.snip(hwnd, Mode::Region, None),
+                MENU_WINDOW => self.snip(hwnd, Mode::Window, None),
+                MENU_SCREEN => self.snip(hwnd, Mode::Screen, None),
+                MENU_LAST_REGION => self.snip_last_region(hwnd),
+                chosen if (MENU_RECENT_FIRST..MENU_RECENT_FIRST + recent.len()).contains(&chosen) => {
+                    self.open_recent(&recent[chosen - MENU_RECENT_FIRST]);
+                }
                 MENU_FOLDER => open_folder(&self.settings.save_folder()),
                 MENU_SETTINGS => self.open_settings(),
                 MENU_UPDATE => start_update_check(hwnd, true, std::time::Duration::ZERO),
@@ -495,6 +565,8 @@ fn open_folder(folder: &std::path::Path) {
 
 /// Posted as the trigger's mode number when the default mode from the settings applies.
 const DEFAULT_MODE: usize = 99;
+/// Posted as the trigger's mode number for Shift+PrtSc: the last area again.
+const LAST_REGION: usize = 98;
 
 fn mode_number(mode: Mode) -> usize {
     match mode {
@@ -543,7 +615,7 @@ fn should_swallow(virtual_key: u32, key_message: u32) -> bool {
         if enabled && is_down && windows_key && shift && !control && !alt {
             // Key repeat sends more key-downs; only the first one snips.
             if !SWALLOWING_S.swap(true, Ordering::SeqCst) {
-                trigger_from_hook();
+                trigger_from_hook(DEFAULT_MODE);
             }
             return true;
         }
@@ -558,7 +630,8 @@ fn should_swallow(virtual_key: u32, key_message: u32) -> bool {
         let enabled = USE_PRINT_SCREEN.load(Ordering::SeqCst);
         if enabled && is_down && !windows_key && !alt {
             if !SWALLOWING_PRINT_SCREEN.swap(true, Ordering::SeqCst) {
-                trigger_from_hook();
+                // Shift+PrtSc snips the last area again; Windows gives it no job of its own.
+                trigger_from_hook(if shift { LAST_REGION } else { DEFAULT_MODE });
             }
             return true;
         }
@@ -569,13 +642,13 @@ fn should_swallow(virtual_key: u32, key_message: u32) -> bool {
     false
 }
 
-fn trigger_from_hook() {
+fn trigger_from_hook(mode_number: usize) {
     // A harmless injected key: stops the Start menu from opening when Win is released,
     // and makes us the last input source so the overlay may take the foreground.
     send_dummy_key();
     let hwnd = HWND(DAEMON_WINDOW.load(Ordering::SeqCst) as *mut _);
     unsafe {
-        let _ = PostMessageW(Some(hwnd), MESSAGE_TRIGGER, WPARAM(DEFAULT_MODE), LPARAM(0));
+        let _ = PostMessageW(Some(hwnd), MESSAGE_TRIGGER, WPARAM(mode_number), LPARAM(0));
     }
 }
 

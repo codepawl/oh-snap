@@ -27,7 +27,7 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW, IDC_HAND, KillTimer,
     LoadCursorW, MA_NOACTIVATE, RegisterClassExW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SetCursor, SetTimer,
-    SetWindowLongPtrW, ShowWindow, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCDESTROY, WM_RBUTTONUP,
+    SetWindowLongPtrW, ShowWindow, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCDESTROY, WM_RBUTTONUP,
     WM_PAINT, WM_SETCURSOR, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{HSTRING, Interface, Result, w};
@@ -58,11 +58,16 @@ const HIDE_TIMER: usize = 1;
 const TICK_TIMER: usize = 2;
 const TICK_MILLISECONDS: u32 = 33;
 const RING_RADIUS: f32 = 7.0;
+/// How far, in DIPs, the pointer moves with the button down before a click becomes a drag.
+const DRAG_DISTANCE: f32 = 4.0;
 // Not in the windows crate's WindowsAndMessaging module.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 pub enum CardMessage {
-    Saved { copied: bool, path: Option<PathBuf> },
+    /// `history` is the kept copy, dragged out when the snip was not saved to a folder.
+    Saved { copied: bool, path: Option<PathBuf>, history: Option<PathBuf> },
+    /// A snip from the tray's recent list, put back on the clipboard.
+    Recent { path: PathBuf },
     Failed(String),
     /// The delay timer: seconds left before the capture.
     Countdown(u32),
@@ -76,6 +81,8 @@ struct CardState {
     thumbnail: Option<ID2D1Bitmap>,
     /// A copy of the snip for the right-click menu.
     image: Option<Image>,
+    /// Where the snip came from on screen; a pin opens there.
+    area: PixelRect,
     image_size: (f32, f32),
     message: CardMessage,
     size: (f32, f32),
@@ -85,6 +92,8 @@ struct CardState {
     /// When the hide countdown started; none while the pointer holds the card open.
     hide_started: Option<std::time::Instant>,
     hide_after: std::time::Duration,
+    /// Where the left button went down on the thumbnail; moving away from it starts a drag.
+    press: Option<(f32, f32)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -169,6 +178,7 @@ pub fn show(graphics: &Graphics, image: Option<&Image>, message: CardMessage, ne
             height: image.height,
             bgra: image.bgra.clone(),
         }),
+        area: near,
         image_size,
         message,
         size: (CARD_WIDTH, card_height),
@@ -177,6 +187,7 @@ pub fn show(graphics: &Graphics, image: Option<&Image>, message: CardMessage, ne
         buttons: Vec::new(),
         hide_started: None,
         hide_after: std::time::Duration::from_millis(u64::from(hide_after_ms())),
+        press: None,
     });
     state.start_countdown(hwnd);
     unsafe {
@@ -314,6 +325,21 @@ unsafe extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lp
                 state.stop_countdown(hwnd);
                 state.paint();
             }
+            let left_button_down = wparam.0 & 0x0001 != 0;
+            if let (Some(press), true) = (state.press, left_button_down) {
+                let point = state.to_dips(hwnd, lparam);
+                if (point.0 - press.0).abs() > DRAG_DISTANCE || (point.1 - press.1).abs() > DRAG_DISTANCE {
+                    state.press = None;
+                    if let Some(file) = state.drag_file() {
+                        state.stop_countdown(hwnd);
+                        drag_out(hwnd, &file);
+                        unsafe {
+                            let _ = DestroyWindow(hwnd);
+                        }
+                        return LRESULT(0);
+                    }
+                }
+            }
             let hovered = state.action_at(state.to_dips(hwnd, lparam));
             if hovered != state.hovered_action {
                 state.hovered_action = hovered;
@@ -328,7 +354,13 @@ unsafe extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lp
             state.paint();
             LRESULT(0)
         }
+        WM_LBUTTONDOWN => {
+            let point = state.to_dips(hwnd, lparam);
+            state.press = state.over_thumbnail(point).then_some(point);
+            LRESULT(0)
+        }
         WM_LBUTTONUP => {
+            state.press = None;
             let action = state.action_at(state.to_dips(hwnd, lparam)).unwrap_or(Action::OpenFile);
             state.run(action);
             unsafe {
@@ -338,10 +370,7 @@ unsafe extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lp
         }
         WM_RBUTTONUP => {
             let point = state.to_dips(hwnd, lparam);
-            let over_thumbnail = thumbnail_rect(state.image_size).is_some_and(|frame| {
-                point.0 >= frame.left && point.0 < frame.right && point.1 >= frame.top && point.1 < frame.bottom
-            });
-            if over_thumbnail && state.open_image_menu(hwnd) {
+            if state.over_thumbnail(point) && state.open_image_menu(hwnd) {
                 unsafe {
                     let _ = DestroyWindow(hwnd);
                 }
@@ -400,7 +429,25 @@ impl CardState {
     fn saved_path(&self) -> Option<&Path> {
         match &self.message {
             CardMessage::Saved { path, .. } => path.as_deref(),
+            CardMessage::Recent { path } => Some(path),
             CardMessage::Failed(_) | CardMessage::Countdown(_) | CardMessage::Notice { .. } => None,
+        }
+    }
+
+    fn over_thumbnail(&self, point: (f32, f32)) -> bool {
+        thumbnail_rect(self.image_size).is_some_and(|frame| {
+            point.0 >= frame.left && point.0 < frame.right && point.1 >= frame.top && point.1 < frame.bottom
+        })
+    }
+
+    /// The file a drag hands over: the saved snip, or the kept copy when saving is off.
+    fn drag_file(&self) -> Option<PathBuf> {
+        if let Some(path) = self.saved_path() {
+            return Some(path.to_path_buf());
+        }
+        match &self.message {
+            CardMessage::Saved { history, .. } => history.clone(),
+            _ => None,
         }
     }
 
@@ -431,7 +478,7 @@ impl CardState {
         let Some(image) = self.image.as_ref() else {
             return false;
         };
-        let finished = match image_menu::show(hwnd) {
+        let finished = match image_menu::show(hwnd, &image_menu::SNIP_ACTIONS) {
             Some(ImageAction::Copy) => {
                 image_menu::copy(hwnd, image);
                 false
@@ -443,6 +490,13 @@ impl CardState {
                 };
                 image_menu::save_as(hwnd, image, &folder).is_some()
             }
+            Some(ImageAction::Pin) => {
+                if let Err(error) = crate::pin::open(self.graphics(), crate::pin::copy_image(image), self.area) {
+                    crate::log::write(&format!("pin failed: {error}"));
+                }
+                true
+            }
+            Some(ImageAction::Close) => true,
             Some(ImageAction::Edit) => {
                 let copy = Image {
                     width: image.width,
@@ -523,12 +577,19 @@ impl CardState {
 
         let mut buttons = Vec::new();
         match &self.message {
-            CardMessage::Saved { copied, path } => {
-                let headline = match (copied, path.is_some()) {
-                    (true, true) => "copied · saved",
-                    (true, false) => "copied to clipboard",
-                    (false, true) => "saved",
-                    (false, false) => "snipped",
+            CardMessage::Saved { .. } | CardMessage::Recent { .. } => {
+                let (headline, path) = match &self.message {
+                    CardMessage::Saved { copied, path, .. } => {
+                        let headline = match (copied, path.is_some()) {
+                            (true, true) => "copied · saved",
+                            (true, false) => "copied to clipboard",
+                            (false, true) => "saved",
+                            (false, false) => "snipped",
+                        };
+                        (headline, path.as_ref())
+                    }
+                    CardMessage::Recent { path } => ("copied again", Some(path)),
+                    _ => ("", None),
                 };
                 draw_mark(&target, Mark::Check, PADDING, line_top, &accent);
                 self.text(&target, headline, PADDING + 16.0, line_top, &text);
@@ -648,6 +709,7 @@ pub fn render_offscreen(graphics: &Graphics, image: Option<&Image>, message: Car
         target,
         thumbnail,
         image: None,
+        area: PixelRect { left: 0, top: 0, width: 0, height: 0 },
         image_size,
         message,
         size: (CARD_WIDTH, card_height),
@@ -657,12 +719,29 @@ pub fn render_offscreen(graphics: &Graphics, image: Option<&Image>, message: Car
         // A third of the way through, so the preview shows the ring running.
         hide_started: std::time::Instant::now().checked_sub(std::time::Duration::from_millis(1700)),
         hide_after: std::time::Duration::from_millis(5000),
+        press: None,
     };
     state.paint();
     let stride = width * 4;
     let mut pixels = vec![0u8; (stride * height) as usize];
     unsafe { bitmap.CopyPixels(std::ptr::null(), stride, &mut pixels)? };
     Ok((pixels, width, height))
+}
+
+/// Drags the snip file out of the card, into a chat, a browser or Explorer. The shell's own
+/// data object for the file carries it, so every app that takes dropped files takes it.
+fn drag_out(hwnd: HWND, file: &Path) {
+    use windows::Win32::System::Com::IDataObject;
+    use windows::Win32::System::Ole::DROPEFFECT_COPY;
+    use windows::Win32::UI::Shell::{BHID_DataObject, IShellItem, SHCreateItemFromParsingName, SHDoDragDrop};
+    let dragged = unsafe {
+        SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(file.as_os_str()), None)
+            .and_then(|item| item.BindToHandler::<_, IDataObject>(None, &BHID_DataObject))
+            .and_then(|data| SHDoDragDrop(Some(hwnd), &data, None, DROPEFFECT_COPY))
+    };
+    if let Err(error) = dragged {
+        crate::log::write(&format!("drag of {} failed: {error}", file.display()));
+    }
 }
 
 /// A ring in the corner that empties clockwise until the card hides. A dark disc keeps it

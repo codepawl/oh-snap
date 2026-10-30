@@ -116,6 +116,7 @@ oh-snap                      start in the tray
 oh-snap install              install for this user and take the shortcuts
 oh-snap uninstall            give the shortcuts back to Snipping Tool
 oh-snap capture [region|window|screen] [--rect X,Y,W,H] [--out FILE] [--no-clipboard] [--no-save]
+oh-snap capture last         snip the last area again (needs the tray process)
 oh-snap edit FILE            open a PNG in the editor
 oh-snap addons [list]        show the add-ons
 oh-snap addons add FOLDER    copy an add-on folder in
@@ -130,6 +131,14 @@ oh-snap settings             open the settings
 oh-snap update               install the latest release from GitHub
 oh-snap quit                 stop the tray process
 ```
+
+Press Shift+PrtSc to snip the last area again without the overlay, for before and after shots.
+
+The tray menu lists your last 10 snips under `recent snips`. Picking one puts it back on the clipboard and shows its card. For this, oh-snap keeps the last 20 snips in `%LOCALAPPDATA%\oh-snap\history`, also when saving to a folder is off.
+
+Drag the image on the card into a chat, a browser or Explorer to drop the file there.
+
+Right-click a snip and pick `pin to screen` to keep it on top of every window while you work. Drag the pin to move it, scroll to zoom, and Ctrl+scroll to make it see-through. Ctrl+C copies it, and Esc or a double-click closes it.
 
 oh-snap updates itself from GitHub Releases. The tray process looks for a new version 10 seconds after it starts and then every 6 hours. It downloads the new `oh-snap.exe`, checks it against the release's `SHA256SUMS.txt`, and swaps it in between snips, never in the middle of one. A card then shows the new version. Set `Updates` to `notify` to get only the card, or to `off`.
 
@@ -165,6 +174,7 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 ## Next
 
 - Add-ons that run after every snip, not only from the editor.
+- Screen recording with GIF export, text and colour picking on the overlay, QR codes.
 - macOS and Linux versions, which are coming.
 
 ## License

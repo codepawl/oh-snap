@@ -1,5 +1,5 @@
 //! The right-click menu on a snip shown in a window: copy it, save a copy somewhere
-//! else, or open it in the editor.
+//! else, open it in the editor or pin it on top of everything.
 
 use std::path::{Path, PathBuf};
 
@@ -23,20 +23,32 @@ pub enum ImageAction {
     Copy,
     SaveAs,
     Edit,
+    Pin,
+    /// Closes the window the menu belongs to, such as a pin.
+    Close,
 }
 
-const ACTIONS: [(ImageAction, &str); 3] = [
-    (ImageAction::Copy, "copy image"),
-    (ImageAction::SaveAs, "save as…"),
-    (ImageAction::Edit, "edit"),
-];
+impl ImageAction {
+    fn label(self) -> &'static str {
+        match self {
+            ImageAction::Copy => "copy image",
+            ImageAction::SaveAs => "save as…",
+            ImageAction::Edit => "edit",
+            ImageAction::Pin => "pin to screen",
+            ImageAction::Close => "close",
+        }
+    }
+}
+
+/// What a snip on a card or in the dialog offers.
+pub const SNIP_ACTIONS: [ImageAction; 4] = [ImageAction::Copy, ImageAction::SaveAs, ImageAction::Edit, ImageAction::Pin];
 
 /// Shows the menu at the cursor and returns what was picked.
-pub fn show(owner: HWND) -> Option<ImageAction> {
+pub fn show(owner: HWND, actions: &[ImageAction]) -> Option<ImageAction> {
     unsafe {
         let menu = CreatePopupMenu().ok()?;
-        for (index, (_, label)) in ACTIONS.iter().enumerate() {
-            let _ = AppendMenuW(menu, MF_STRING, index + 1, &HSTRING::from(*label));
+        for (index, action) in actions.iter().enumerate() {
+            let _ = AppendMenuW(menu, MF_STRING, index + 1, &HSTRING::from(action.label()));
         }
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
@@ -45,7 +57,7 @@ pub fn show(owner: HWND) -> Option<ImageAction> {
         let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, cursor.x, cursor.y, None, owner, None);
         let _ = DestroyMenu(menu);
         let index = (chosen.0 as usize).checked_sub(1)?;
-        ACTIONS.get(index).map(|(action, _)| *action)
+        actions.get(index).copied()
     }
 }
 

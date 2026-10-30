@@ -54,6 +54,7 @@ pub fn run(folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let snipped = output::crop(&screenshot, windows[1]).ok_or("fake window is off screen")?;
     let saved = CardMessage::Saved {
         copied: true,
+        history: None,
         path: Some(PathBuf::from(r"C:\Users\you\Pictures\Screenshots\Screenshot 2026-10-29 201500.png")),
     };
     write_editor_previews(&graphics, &snipped, folder)?;

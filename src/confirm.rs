@@ -78,6 +78,7 @@ const BUTTONS: [(Choice, char, &str, &str); 4] = [
 struct Dialog {
     graphics: *const Graphics,
     image: *const Image,
+    area: PixelRect,
     save_folder: PathBuf,
     saved_as: Option<PathBuf>,
     target: ID2D1RenderTarget,
@@ -146,6 +147,7 @@ pub fn ask(graphics: &Graphics, image: &Image, near: PixelRect, save_folder: &Pa
     let target = create_target(graphics, hwnd, pixel_width, pixel_height, dpi_x as f32)?;
     let mut dialog = Dialog::new(graphics, target, image, height, scale)?;
     dialog.save_folder = save_folder.to_path_buf();
+    dialog.area = near;
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, &mut dialog as *mut Dialog as isize);
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -308,6 +310,7 @@ impl Dialog {
         Ok(Self {
             graphics,
             image,
+            area: PixelRect { left: 0, top: 0, width: 0, height: 0 },
             save_folder: PathBuf::new(),
             saved_as: None,
             target,
@@ -329,7 +332,7 @@ impl Dialog {
 
     fn open_image_menu(&mut self, hwnd: HWND) {
         let image = unsafe { &*self.image };
-        match image_menu::show(hwnd) {
+        match image_menu::show(hwnd, &image_menu::SNIP_ACTIONS) {
             Some(ImageAction::Copy) => image_menu::copy(hwnd, image),
             Some(ImageAction::SaveAs) => {
                 if let Some(path) = image_menu::save_as(hwnd, image, &self.save_folder) {
@@ -338,6 +341,12 @@ impl Dialog {
                 }
             }
             Some(ImageAction::Edit) => self.choice = Some(Choice::Edit),
+            Some(ImageAction::Pin) => {
+                if let Err(error) = crate::pin::open(self.graphics(), crate::pin::copy_image(image), self.area) {
+                    crate::log::write(&format!("pin failed: {error}"));
+                }
+            }
+            Some(ImageAction::Close) => {}
             None => {}
         }
     }

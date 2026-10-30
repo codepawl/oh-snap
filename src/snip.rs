@@ -23,6 +23,8 @@ pub struct SnipOutcome {
     pub image: Image,
     pub copied: bool,
     pub saved_to: Option<PathBuf>,
+    /// The copy kept for the tray's recent snips.
+    pub history: Option<PathBuf>,
 }
 
 pub type SnipResult = Result<Option<SnipOutcome>, Box<dyn std::error::Error>>;
@@ -85,6 +87,7 @@ pub fn deliver(
     if settings.copy_to_clipboard {
         output::copy_to_clipboard(owner, &image, &png_bytes)?;
     }
+    let history = crate::history::record(&png_bytes);
     let mut saved_to = None;
     if let Some(path) = &request.output_path {
         output::write_png_to(&png_bytes, path)?;
@@ -109,5 +112,6 @@ pub fn deliver(
         image,
         copied: settings.copy_to_clipboard,
         saved_to,
+        history,
     })
 }
