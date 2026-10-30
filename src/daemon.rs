@@ -449,6 +449,15 @@ impl Daemon {
                 }
                 None => match snip::pick(capturer, &self.graphics, &request, true, std::mem::replace(&mut self.next_tool, Tool::Snip))? {
                     Some(Picked::Area(area)) => area,
+                    Some(Picked::Draw { area, held_window }) => {
+                        let Some(image) = crate::markup::run(&self.graphics, capturer.screenshot(), area, held_window)? else {
+                            return Ok(());
+                        };
+                        self.last_area = Some(area);
+                        let outcome = snip::deliver_image(Some(hwnd), &request, image, area)?;
+                        self.show_outcome(outcome)?;
+                        return Ok(());
+                    }
                     Some(Picked::Record(area)) => {
                         self.start_recording(hwnd, area);
                         return Ok(());
@@ -511,20 +520,26 @@ impl Daemon {
             }
             let mut outcome = snip::deliver(capturer, Some(hwnd), &request, area)?;
             outcome.copied = self.settings.copy_to_clipboard;
-            if self.settings.open_editor {
-                crate::editor::open(&self.graphics, outcome.image, outcome.saved_to, false)?;
-            } else if self.settings.show_card {
-                let message = CardMessage::Saved {
-                    copied: outcome.copied,
-                    path: outcome.saved_to,
-                    history: outcome.history,
-                };
-                if let Err(error) = crate::card::show(&self.graphics, Some(&outcome.image), message, outcome.area) {
-                    crate::log::write(&format!("card failed: {error}"));
-                }
-            }
+            self.show_outcome(outcome)?;
             return Ok(());
         }
+    }
+
+    /// The editor or the card, as the settings say.
+    fn show_outcome(&self, outcome: snip::SnipOutcome) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if self.settings.open_editor {
+            crate::editor::open(&self.graphics, outcome.image, outcome.saved_to, false)?;
+        } else if self.settings.show_card {
+            let message = CardMessage::Saved {
+                copied: outcome.copied,
+                path: outcome.saved_to,
+                history: outcome.history,
+            };
+            if let Err(error) = crate::card::show(&self.graphics, Some(&outcome.image), message, outcome.area) {
+                crate::log::write(&format!("card failed: {error}"));
+            }
+        }
+        Ok(())
     }
 
     /// Puts a recent snip back on the clipboard and shows its card, where it can be pinned,

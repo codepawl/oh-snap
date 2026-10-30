@@ -16,6 +16,7 @@ mod image_menu;
 mod install;
 mod log;
 mod logo;
+mod markup;
 mod ocr;
 mod output;
 mod particles;

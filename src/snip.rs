@@ -36,6 +36,8 @@ pub enum Picked {
     Color([u8; 3]),
     /// Record this area.
     Record(PixelRect),
+    /// Draw on this area first. The overlay is still on screen as `held_window`.
+    Draw { area: PixelRect, held_window: HWND },
 }
 
 pub type SnipResult = Result<Option<SnipOutcome>, Box<dyn std::error::Error>>;
@@ -63,10 +65,12 @@ pub fn pick(
     if let Some(color) = outcome.color {
         return Ok(Some(Picked::Color(color)));
     }
-    Ok(outcome.selection.map(|area| match outcome.tool {
-        Tool::Text => Picked::Text(area),
-        Tool::Record => Picked::Record(area),
-        Tool::Snip | Tool::Color => Picked::Area(area),
+    let held_window = outcome.held_window;
+    Ok(outcome.selection.map(|area| match (outcome.tool, held_window) {
+        (Tool::Draw, Some(held_window)) => Picked::Draw { area, held_window },
+        (Tool::Text, _) => Picked::Text(area),
+        (Tool::Record, _) => Picked::Record(area),
+        (Tool::Snip | Tool::Color | Tool::Draw, _) => Picked::Area(area),
     }))
 }
 
@@ -75,7 +79,7 @@ pub fn run(capturer: &mut Capturer, graphics: &Graphics, owner: Option<HWND>, re
     match pick(capturer, graphics, request, false, Tool::Snip)? {
         Some(Picked::Area(area)) => deliver(capturer, owner, request, area).map(Some),
         // The toolbar here offers only the plain snip.
-        Some(Picked::Text(_) | Picked::Color(_) | Picked::Record(_)) | None => Ok(None),
+        Some(Picked::Text(_) | Picked::Color(_) | Picked::Record(_) | Picked::Draw { .. }) | None => Ok(None),
     }
 }
 
@@ -105,12 +109,22 @@ pub fn deliver(
     request: &SnipRequest,
     area: PixelRect,
 ) -> Result<SnipOutcome, Box<dyn std::error::Error>> {
+    let image = crop(capturer, area)?;
+    deliver_image(owner, request, image, area)
+}
+
+/// Clipboard and file for a finished image, such as a snip with drawings on it.
+pub fn deliver_image(
+    owner: Option<HWND>,
+    request: &SnipRequest,
+    image: Image,
+    area: PixelRect,
+) -> Result<SnipOutcome, Box<dyn std::error::Error>> {
     let started = Instant::now();
     let settings = &request.settings;
     if settings.shutter_sound {
         sound::play_shutter();
     }
-    let image = crop(capturer, area)?;
     let png_bytes = output::encode_png(&image)?;
     if settings.copy_to_clipboard {
         output::copy_to_clipboard(owner, &image, &png_bytes)?;

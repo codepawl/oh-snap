@@ -153,7 +153,7 @@ unsafe extern "system" fn frame_proc(hwnd: HWND, message: u32, wparam: WPARAM, l
 }
 
 /// Where the bar goes: under the area, else over it, else inside its bottom edge.
-fn bar_position(area: PixelRect, work: RECT, width: i32, height: i32) -> (i32, i32) {
+pub(crate) fn bar_position(area: PixelRect, work: RECT, width: i32, height: i32) -> (i32, i32) {
     let centered = area.left + (area.width - width) / 2;
     let left = centered.clamp(work.left, (work.right - width).max(work.left));
     let below = area.bottom() + GAP_TO_AREA;

@@ -52,6 +52,17 @@ pub fn run(folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let snipped = output::crop(&screenshot, windows[1]).ok_or("fake window is off screen")?;
+    let (markup_pixels, flattened) = crate::markup::render_offscreen(&graphics, &screenshot, windows[1])?;
+    let markup_frame = Image {
+        width: WIDTH as u32,
+        height: screenshot.bounds.height as u32,
+        bgra: markup_pixels,
+    };
+    for (name, image) in [("markup", &markup_frame), ("markup-flattened", &flattened)] {
+        let path = folder.join(format!("{name}.png"));
+        output::write_png_to(&output::encode_png(image)?, &path)?;
+        println!("{}", path.display());
+    }
     let saved = CardMessage::Saved {
         copied: true,
         history: None,

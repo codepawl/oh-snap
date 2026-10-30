@@ -136,6 +136,8 @@ oh-snap gif FILE             make a GIF from a recording
 oh-snap quit                 stop the tray process
 ```
 
+Press `D` on the overlay to draw before you keep the snip. Pick an area, a window or a screen, then use the bar next to it: arrow, box, pen, marker, text and hide, in five colours. Ctrl+Z undoes a step. Enter keeps the snip with your drawing, and Esc drops it. The drawing tools are the same as in the editor.
+
 Press Win+Shift+R, or `V` on the overlay, to record video. Pick an area, a window or a screen. After a 3 second countdown, a small bar shows the time with pause and stop, and a thin frame marks the area. Windows keeps both out of the video. Press Win+Shift+R again or click the tray icon to stop. The MP4 goes to `Videos\Screen Recordings`, with the pointer and the sound that your computer plays. Turn on `Microphone` in the settings to add your voice. The card can open the file, show it in Explorer, or make a GIF next to it. You can drag the card's image into another app.
 
 Press `T` on the overlay to read text instead of keeping an image. Pick an area, a window or a screen, and the text goes to the clipboard. A QR code goes to the clipboard the same way, and when it holds a web link, a click on the card opens it. It uses the OCR engine in Windows, so it needs no download and takes about 100 ms.
@@ -185,7 +187,7 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 ## Next
 
 - Add-ons that run after every snip, not only from the editor.
-- Trimming for recordings, drawing on the overlay.
+- Trimming for recordings.
 - macOS and Linux versions, which are coming.
 
 ## License

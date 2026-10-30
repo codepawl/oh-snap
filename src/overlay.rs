@@ -81,6 +81,7 @@ pub enum Tool {
     Text,
     Color,
     Record,
+    Draw,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,10 +90,11 @@ enum ToolbarItem {
     Tool(Tool),
 }
 
-const TOOLBAR_ITEMS: [(ToolbarItem, &str, &str); 6] = [
+const TOOLBAR_ITEMS: [(ToolbarItem, &str, &str); 7] = [
     (ToolbarItem::Mode(Mode::Region), "r", "region"),
     (ToolbarItem::Mode(Mode::Window), "w", "window"),
     (ToolbarItem::Mode(Mode::Screen), "s", "screen"),
+    (ToolbarItem::Tool(Tool::Draw), "d", "draw"),
     (ToolbarItem::Tool(Tool::Record), "v", "video"),
     (ToolbarItem::Tool(Tool::Text), "t", "text"),
     (ToolbarItem::Tool(Tool::Color), "c", "color"),
@@ -233,6 +235,8 @@ pub struct OverlayOutcome {
     pub tool: Tool,
     /// The pixel the colour tool picked, as red, green, blue.
     pub color: Option<[u8; 3]>,
+    /// With the draw tool the overlay stays on screen, for the markup window to take over.
+    pub held_window: Option<HWND>,
 }
 
 struct Brushes {
@@ -355,11 +359,15 @@ pub fn select_area(graphics: &Graphics, screenshot: &Screenshot, options: Overla
         }
     }
 
+    let keep_on_screen = state.tool == Tool::Draw && state.selection.is_some();
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-        let _ = DestroyWindow(hwnd);
+        if !keep_on_screen {
+            let _ = DestroyWindow(hwnd);
+        }
     }
     Ok(OverlayOutcome {
+        held_window: keep_on_screen.then_some(hwnd),
         selection: state.selection,
         first_frame_at: state.first_frame_at,
         tool: state.tool,
@@ -475,7 +483,7 @@ fn register_class() {
     unsafe { RegisterClassExW(&class) };
 }
 
-fn create_target(graphics: &Graphics, hwnd: HWND, bounds: PixelRect) -> Result<ID2D1HwndRenderTarget> {
+pub(crate) fn create_target(graphics: &Graphics, hwnd: HWND, bounds: PixelRect) -> Result<ID2D1HwndRenderTarget> {
     let properties = D2D1_RENDER_TARGET_PROPERTIES {
         r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
         pixelFormat: D2D1_PIXEL_FORMAT {
@@ -499,7 +507,7 @@ fn create_target(graphics: &Graphics, hwnd: HWND, bounds: PixelRect) -> Result<I
     unsafe { graphics.d2d.CreateHwndRenderTarget(&properties, &hwnd_properties) }
 }
 
-fn create_screen_bitmap(target: &ID2D1RenderTarget, screenshot: &Screenshot) -> Result<ID2D1Bitmap> {
+pub(crate) fn create_screen_bitmap(target: &ID2D1RenderTarget, screenshot: &Screenshot) -> Result<ID2D1Bitmap> {
     let properties = D2D1_BITMAP_PROPERTIES {
         pixelFormat: D2D1_PIXEL_FORMAT {
             format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -826,6 +834,10 @@ impl OverlayState {
             key if key == u16::from(b'R') => self.set_mode(Mode::Region),
             key if key == u16::from(b'W') => self.set_mode(Mode::Window),
             key if key == u16::from(b'S') => self.set_mode(Mode::Screen),
+            key if key == u16::from(b'D') && self.extra_tools => {
+                self.toggle_tool(Tool::Draw);
+                self.paint();
+            }
             key if key == u16::from(b'V') && self.extra_tools => {
                 self.toggle_tool(Tool::Record);
                 self.paint();
@@ -1062,7 +1074,7 @@ impl OverlayState {
         let mut hits = Vec::new();
         let mut button_left = bar.left + inset + spark_slot;
         for ((item, key, name), (key_width, name_width, _)) in labels.iter().zip(sizes.iter()) {
-            if *item == ToolbarItem::Tool(Tool::Record) {
+            if *item == ToolbarItem::Tool(Tool::Draw) {
                 button_left += tools_gap;
             }
             let button = D2D_RECT_F {
@@ -1090,6 +1102,7 @@ impl OverlayState {
                 ToolbarItem::Mode(mode) => mode_icon(*mode),
                 ToolbarItem::Tool(Tool::Text) => crate::icons::TEXT,
                 ToolbarItem::Tool(Tool::Record) => crate::icons::VIDEO,
+                ToolbarItem::Tool(Tool::Draw) => crate::icons::PEN,
                 ToolbarItem::Tool(_) => crate::icons::PALETTE,
             };
             self.graphics().draw_icon(&self.target, icon, icon_area, name_brush);
