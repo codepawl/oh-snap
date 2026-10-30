@@ -41,17 +41,51 @@ pub fn crop(screenshot: &Screenshot, area: PixelRect) -> Option<Image> {
     })
 }
 
+/// Clears everything outside `outline`, which is in the image's pixels. What is cleared turns
+/// white and see-through: PNG keeps it see-through, and formats without alpha show white.
+pub fn keep_inside(image: &mut Image, outline: &[(f32, f32)]) {
+    let width = image.width as usize;
+    for row in 0..image.height as usize {
+        let inside = spans_inside(outline, row as f32 + 0.5);
+        for column in 0..width {
+            let center = column as f32 + 0.5;
+            if !inside.iter().any(|(left, right)| center >= *left && center < *right) {
+                let offset = (row * width + column) * 4;
+                image.bgra[offset..offset + 4].copy_from_slice(&[255, 255, 255, 0]);
+            }
+        }
+    }
+}
+
+/// Where a horizontal line at `y` is inside the outline, by the even-odd rule.
+fn spans_inside(outline: &[(f32, f32)], y: f32) -> Vec<(f32, f32)> {
+    let mut crossings = Vec::new();
+    for (index, from) in outline.iter().enumerate() {
+        let to = outline[(index + 1) % outline.len()];
+        if (from.1 <= y) != (to.1 <= y) {
+            crossings.push(from.0 + (y - from.1) / (to.1 - from.1) * (to.0 - from.0));
+        }
+    }
+    crossings.sort_by(f32::total_cmp);
+    crossings.chunks_exact(2).map(|pair| (pair[0], pair[1])).collect()
+}
+
 pub fn encode_png(image: &Image) -> std::io::Result<Vec<u8>> {
-    let mut rgb = Vec::with_capacity(image.width as usize * image.height as usize * 3);
+    let has_clear_pixels = image.bgra.chunks_exact(4).any(|pixel| pixel[3] != 255);
+    let channels = if has_clear_pixels { 4 } else { 3 };
+    let mut rgb = Vec::with_capacity(image.width as usize * image.height as usize * channels);
     for pixel in image.bgra.chunks_exact(4) {
         rgb.push(pixel[2]);
         rgb.push(pixel[1]);
         rgb.push(pixel[0]);
+        if has_clear_pixels {
+            rgb.push(pixel[3]);
+        }
     }
     let mut png_bytes = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut png_bytes, image.width, image.height);
-        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_color(if has_clear_pixels { png::ColorType::Rgba } else { png::ColorType::Rgb });
         encoder.set_depth(png::BitDepth::Eight);
         encoder.set_compression(png::Compression::Fast);
         let mut writer = encoder.write_header().map_err(std::io::Error::other)?;
@@ -248,6 +282,43 @@ fn build_dib(image: &Image) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn white_square(side: u32) -> Image {
+        Image {
+            width: side,
+            height: side,
+            bgra: vec![200; (side * side * 4) as usize],
+        }
+    }
+
+    #[test]
+    fn only_the_inside_of_an_outline_stays() {
+        let mut image = white_square(10);
+        keep_inside(&mut image, &[(2.0, 2.0), (8.0, 2.0), (8.0, 8.0), (2.0, 8.0)]);
+        let alpha = |x: usize, y: usize| image.bgra[(y * 10 + x) * 4 + 3];
+        assert_eq!(alpha(5, 5), 200);
+        assert_eq!(alpha(2, 2), 200);
+        assert_eq!(alpha(1, 5), 0);
+        assert_eq!(alpha(8, 5), 0);
+        assert_eq!(alpha(5, 9), 0);
+        assert_eq!(&image.bgra[..4], &[255, 255, 255, 0]);
+    }
+
+    #[test]
+    fn a_crossed_outline_follows_the_even_odd_rule() {
+        // A bow tie: the two triangles are inside, the gaps at the top and bottom middle are not.
+        let spans = spans_inside(&[(0.0, 0.0), (10.0, 10.0), (10.0, 0.0), (0.0, 10.0)], 2.0);
+        assert_eq!(spans.len(), 2);
+    }
+
+    #[test]
+    fn png_keeps_clear_pixels_only_when_there_are_some() {
+        let opaque = Image { width: 1, height: 1, bgra: vec![1, 2, 3, 255] };
+        let clear = Image { width: 1, height: 1, bgra: vec![255, 255, 255, 0] };
+        let color_type = |bytes: Vec<u8>| bytes[25];
+        assert_eq!(color_type(encode_png(&opaque).unwrap()), 2);
+        assert_eq!(color_type(encode_png(&clear).unwrap()), 6);
+    }
 
     #[test]
     fn colors_read_as_hex_and_hsl() {

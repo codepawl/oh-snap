@@ -46,6 +46,8 @@ const MESSAGE_UPDATE_DOWNLOADED: u32 = WM_APP + 4;
 const MESSAGE_TEXT_READ: u32 = WM_APP + 5;
 const MESSAGE_RECORDING_DONE: u32 = WM_APP + 6;
 const MESSAGE_GIF_DONE: u32 = WM_APP + 7;
+const MESSAGE_OPEN_TRIM: u32 = WM_APP + 8;
+const MESSAGE_TRIM_DONE: u32 = WM_APP + 9;
 const COPYDATA_COMMAND: usize = 0x6F68_736E;
 /// The process hands its memory back to Windows this long after the last snip, setting or
 /// update. Back-to-back snips stay at full speed; the first one after a quiet spell pays
@@ -66,6 +68,7 @@ const MENU_SETTINGS: usize = 6;
 const MENU_UPDATE: usize = 7;
 const MENU_LAST_REGION: usize = 8;
 const MENU_RECORD: usize = 9;
+const MENU_FREEFORM: usize = 10;
 const MENU_RECENT_FIRST: usize = 100;
 
 static DAEMON_WINDOW: AtomicIsize = AtomicIsize::new(0);
@@ -236,7 +239,7 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
     let daemon = unsafe { &mut *daemon_pointer };
     if matches!(
         message,
-        MESSAGE_TRIGGER | MESSAGE_TRAY | MESSAGE_UPDATE_CHECKED | MESSAGE_UPDATE_DOWNLOADED | MESSAGE_TEXT_READ | MESSAGE_RECORDING_DONE | MESSAGE_GIF_DONE | WM_COPYDATA
+        MESSAGE_TRIGGER | MESSAGE_TRAY | MESSAGE_UPDATE_CHECKED | MESSAGE_UPDATE_DOWNLOADED | MESSAGE_TEXT_READ | MESSAGE_RECORDING_DONE | MESSAGE_GIF_DONE | MESSAGE_OPEN_TRIM | MESSAGE_TRIM_DONE | WM_COPYDATA
     ) {
         schedule_trim(hwnd);
     }
@@ -270,6 +273,16 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
         MESSAGE_RECORDING_DONE => {
             let result = unsafe { Box::from_raw(lparam.0 as *mut std::result::Result<crate::recorder::Recording, String>) };
             daemon.on_recording_done(*result);
+            LRESULT(0)
+        }
+        MESSAGE_OPEN_TRIM => {
+            let recording = unsafe { Box::from_raw(lparam.0 as *mut std::path::PathBuf) };
+            daemon.open_trim_window(hwnd, *recording);
+            LRESULT(0)
+        }
+        MESSAGE_TRIM_DONE => {
+            let result = unsafe { Box::from_raw(lparam.0 as *mut std::result::Result<crate::trim::Trimmed, String>) };
+            daemon.on_trim_done(*result);
             LRESULT(0)
         }
         MESSAGE_GIF_DONE => {
@@ -442,6 +455,7 @@ impl Daemon {
                 settings: self.settings.clone(),
             };
             let repeating = repeat_area.is_some();
+            let mut outline = None;
             let area = match repeat_area.take() {
                 Some(area) => {
                     capturer.capture()?;
@@ -449,6 +463,10 @@ impl Daemon {
                 }
                 None => match snip::pick(capturer, &self.graphics, &request, true, std::mem::replace(&mut self.next_tool, Tool::Snip))? {
                     Some(Picked::Area(area)) => area,
+                    Some(Picked::Freeform { area, outline: path }) => {
+                        outline = Some(path);
+                        area
+                    }
                     Some(Picked::Draw { area, held_window }) => {
                         let Some(image) = crate::markup::run(&self.graphics, capturer.screenshot(), area, held_window)? else {
                             return Ok(());
@@ -480,8 +498,8 @@ impl Daemon {
             };
             self.last_area = Some(area);
             let mut request = request;
+            let image = snip::crop_outlined(capturer, area, outline.as_deref())?;
             if self.settings.confirm_before_save && !repeating {
-                let image = snip::crop(capturer, area)?;
                 // Like Snipping Tool, the snip is on the clipboard once the area is picked;
                 // the dialog only decides about the file.
                 if self.settings.copy_to_clipboard {
@@ -518,7 +536,7 @@ impl Daemon {
                     }
                 }
             }
-            let mut outcome = snip::deliver(capturer, Some(hwnd), &request, area)?;
+            let mut outcome = snip::deliver_image(Some(hwnd), &request, image, area)?;
             outcome.copied = self.settings.copy_to_clipboard;
             self.show_outcome(outcome)?;
             return Ok(());
@@ -617,6 +635,14 @@ impl Daemon {
     }
 
     fn on_recording_done(&mut self, result: std::result::Result<crate::recorder::Recording, String>) {
+        if let Ok(recording) = &result {
+            crate::log::write(&format!(
+                "recorded {:.1} s, sound {} -> {}",
+                recording.duration.as_secs_f64(),
+                recording.has_sound,
+                recording.path.display()
+            ));
+        }
         if let Some(recording) = self.recording.take() {
             if let Some(windows) = recording.windows {
                 windows.close();
@@ -639,6 +665,55 @@ impl Daemon {
         }
         if let Some((version, exe)) = self.pending_update.take() {
             self.apply_update(version, exe);
+        }
+    }
+
+    /// The window picks the part, then a worker writes it while the tray stays free.
+    fn open_trim_window(&mut self, hwnd: HWND, recording: std::path::PathBuf) {
+        if self.busy {
+            return;
+        }
+        self.busy = true;
+        let part = crate::trim_window::ask(&self.graphics, &recording);
+        self.busy = false;
+        let (from, to) = match part {
+            Ok(Some(part)) => part,
+            Ok(None) => return,
+            Err(error) => {
+                crate::log::write(&format!("trim window failed: {error}"));
+                let _ = crate::card::show(&self.graphics, None, CardMessage::Failed(format!("trim: {error}")), cursor_area());
+                return;
+            }
+        };
+        let message = CardMessage::Notice {
+            title: "saving the trimmed copy…".into(),
+            detail: recording.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default(),
+        };
+        let _ = crate::card::show(&self.graphics, None, message, cursor_area());
+        let window = hwnd.0 as isize;
+        std::thread::spawn(move || {
+            let result = Box::new(crate::trim::trim(&recording, from, to));
+            unsafe {
+                let _ = PostMessageW(Some(HWND(window as *mut _)), MESSAGE_TRIM_DONE, WPARAM(0), LPARAM(Box::into_raw(result) as isize));
+            }
+        });
+    }
+
+    fn on_trim_done(&mut self, result: std::result::Result<crate::trim::Trimmed, String>) {
+        crate::card::close_current();
+        match result {
+            Ok(trimmed) => {
+                crate::log::write(&format!("trimmed to {:.1} s -> {}", trimmed.duration.as_secs_f64(), trimmed.path.display()));
+                let message = CardMessage::Recorded {
+                    path: trimmed.path,
+                    milliseconds: trimmed.duration.as_millis() as u64,
+                };
+                let _ = crate::card::show(&self.graphics, Some(&trimmed.first_frame), message, cursor_area());
+            }
+            Err(error) => {
+                crate::log::write(&format!("trim failed: {error}"));
+                let _ = crate::card::show(&self.graphics, None, CardMessage::Failed(format!("trim: {error}")), cursor_area());
+            }
         }
     }
 
@@ -706,6 +781,7 @@ impl Daemon {
             let _ = AppendMenuW(menu, MF_STRING, MENU_REGION, w!("snip region"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_WINDOW, w!("snip window"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_SCREEN, w!("snip screen"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_FREEFORM, w!("snip freeform"));
             let last_region_flags = if self.last_area.is_some() { MF_STRING } else { MF_STRING | MF_GRAYED };
             let _ = AppendMenuW(menu, last_region_flags, MENU_LAST_REGION, w!("snip last region	Shift+PrtSc"));
             let record_label = if self.recording.is_some() { w!("stop recording") } else { w!("record video\tWin+Shift+R") };
@@ -741,6 +817,7 @@ impl Daemon {
                 MENU_REGION => self.snip(hwnd, Mode::Region, None),
                 MENU_WINDOW => self.snip(hwnd, Mode::Window, None),
                 MENU_SCREEN => self.snip(hwnd, Mode::Screen, None),
+                MENU_FREEFORM => self.snip(hwnd, Mode::Freeform, None),
                 MENU_LAST_REGION => self.snip_last_region(hwnd),
                 MENU_RECORD => self.toggle_recording(hwnd),
                 chosen if (MENU_RECENT_FIRST..MENU_RECENT_FIRST + recent.len()).contains(&chosen) => {
@@ -812,6 +889,7 @@ fn mode_number(mode: Mode) -> usize {
         Mode::Region => 0,
         Mode::Window => 1,
         Mode::Screen => 2,
+        Mode::Freeform => 3,
     }
 }
 
@@ -820,6 +898,7 @@ fn mode_from_number(number: usize) -> Option<Mode> {
         0 => Some(Mode::Region),
         1 => Some(Mode::Window),
         2 => Some(Mode::Screen),
+        3 => Some(Mode::Freeform),
         _ => None,
     }
 }
@@ -899,6 +978,15 @@ fn should_swallow(virtual_key: u32, key_message: u32) -> bool {
 pub fn make_gif(recording: &std::path::Path) {
     let hwnd = HWND(DAEMON_WINDOW.load(Ordering::SeqCst) as *mut _);
     send_command(hwnd, &format!("gif {}", recording.display()));
+}
+
+/// Opens the trim window once the card that asked has closed, by posting instead of calling.
+pub fn open_trim(recording: &std::path::Path) {
+    let hwnd = HWND(DAEMON_WINDOW.load(Ordering::SeqCst) as *mut _);
+    let recording = Box::new(recording.to_path_buf());
+    unsafe {
+        let _ = PostMessageW(Some(hwnd), MESSAGE_OPEN_TRIM, WPARAM(0), LPARAM(Box::into_raw(recording) as isize));
+    }
 }
 
 fn trigger_from_hook(mode_number: usize) {

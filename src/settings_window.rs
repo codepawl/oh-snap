@@ -103,7 +103,7 @@ fn row(field: Field, icon: char, label: &'static str, choice: (Vec<String>, Opti
 
 /// The two columns, groups and rows in reading order, built from the current settings.
 fn columns(settings: &Settings) -> [Vec<Section>; 2] {
-    let modes = [Mode::Region, Mode::Window, Mode::Screen];
+    let modes = [Mode::Region, Mode::Window, Mode::Screen, Mode::Freeform];
     let mode_choice = (
         modes.iter().map(|mode| settings::mode_name(*mode).to_string()).collect(),
         modes.iter().position(|mode| *mode == settings.default_mode),
@@ -511,7 +511,7 @@ impl SettingsWindow {
         let settings = &mut self.settings;
         let on = hit.option == 0;
         match hit.field {
-            Field::DefaultMode => settings.default_mode = [Mode::Region, Mode::Window, Mode::Screen][hit.option],
+            Field::DefaultMode => settings.default_mode = [Mode::Region, Mode::Window, Mode::Screen, Mode::Freeform][hit.option],
             Field::Delay => settings.delay_seconds = DELAY_CHOICES[hit.option],
             Field::ConfirmBeforeSave => settings.confirm_before_save = on,
             Field::SnapToWindows => settings.snap_to_windows = on,

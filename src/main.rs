@@ -6,6 +6,7 @@ mod bench;
 mod card;
 mod compare;
 mod confirm;
+mod crash;
 mod capture;
 mod daemon;
 mod editor;
@@ -31,6 +32,8 @@ mod settings;
 mod settings_window;
 mod sound;
 mod style;
+mod trim;
+mod trim_window;
 mod updater;
 
 use std::path::PathBuf;
@@ -47,7 +50,7 @@ oh-snap — fast screen snips
 
 usage
   oh-snap                          start in the tray (same as `daemon`)
-  oh-snap capture [region|window|screen|last]
+  oh-snap capture [region|window|screen|freeform|last]
                   [--rect X,Y,W,H] capture that area without the overlay
                   [--out FILE]     write the PNG there instead of Pictures\\Screenshots
                   [--no-clipboard] [--no-save]
@@ -56,6 +59,7 @@ usage
   oh-snap record --rect X,Y,W,H [--seconds N] [--fps N] [--no-sound] [--microphone] [--out FILE]
                                    record an area without any window
   oh-snap gif FILE                 make a GIF from a recording
+  oh-snap trim FILE --from S --to S  save a part of a recording as a new file
   oh-snap text FILE                print the QR code or the text in a PNG
   oh-snap update                   install the latest release from GitHub
   oh-snap bench [ROUNDS]           measure capture and overlay speed
@@ -63,6 +67,7 @@ usage
 ";
 
 fn main() {
+    crash::install();
     unsafe {
         // Output reaches the terminal when started from one; ignored otherwise.
         let _ = AttachConsole(ATTACH_PARENT_PROCESS);
@@ -84,7 +89,9 @@ fn dispatch(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         Some("daemon") => Ok(daemon::run(arguments.get(1).map(String::as_str) == Some("--after-update"))?),
         Some("update") => updater::command(),
         Some("record") => record_command(&arguments[1..]),
+        Some("crash-test") => crash::test(arguments.get(1).map(String::as_str)),
         Some("gif") => gif_export::command(arguments.get(1).ok_or("usage: oh-snap gif FILE")?),
+        Some("trim") => trim::command(&arguments[1..]),
         Some("text") => ocr::command(arguments.get(1).ok_or("usage: oh-snap text FILE")?),
         Some("capture") => capture_command(&arguments[1..]),
         Some("install") => install::install(),
@@ -292,5 +299,6 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Region => "region",
         Mode::Window => "window",
         Mode::Screen => "screen",
+        Mode::Freeform => "freeform",
     }
 }

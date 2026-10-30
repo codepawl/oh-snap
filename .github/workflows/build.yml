@@ -32,6 +32,11 @@ jobs:
           # A Windows error must come out as text: exit 1, not a crash.
           $run = Start-Process ./target/release/oh-snap.exe -ArgumentList 'gif', 'no-such-recording.mp4' -Wait -PassThru -NoNewWindow
           if ($run.ExitCode -ne 1) { throw "gif on a missing file exited with $($run.ExitCode)" }
+          # A crash must leave its line in the log.
+          $run = Start-Process ./target/release/oh-snap.exe -ArgumentList 'crash-test' -Wait -PassThru -NoNewWindow
+          if ($run.ExitCode -eq 0) { throw "crash-test did not crash" }
+          $log = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'oh-snap/oh-snap.log'
+          if (-not (Select-String -Path $log -Pattern 'crash in .*exception' -Quiet)) { throw "the crash left no line in the log" }
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')

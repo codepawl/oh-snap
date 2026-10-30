@@ -7,7 +7,7 @@ use windows_numerics::Vector2;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_IGNORE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F,
-    D2D1_PIXEL_FORMAT,
+    D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_BITMAP_PROPERTIES, D2D1_CAP_STYLE_FLAT,
@@ -61,6 +61,7 @@ pub enum Mode {
     Region,
     Window,
     Screen,
+    Freeform,
 }
 
 impl Mode {
@@ -69,6 +70,7 @@ impl Mode {
             "region" | "rect" | "rectangle" => Some(Mode::Region),
             "window" => Some(Mode::Window),
             "screen" | "fullscreen" | "monitor" => Some(Mode::Screen),
+            "freeform" | "free" => Some(Mode::Freeform),
             _ => None,
         }
     }
@@ -90,10 +92,11 @@ enum ToolbarItem {
     Tool(Tool),
 }
 
-const TOOLBAR_ITEMS: [(ToolbarItem, &str, &str); 7] = [
+const TOOLBAR_ITEMS: [(ToolbarItem, &str, &str); 8] = [
     (ToolbarItem::Mode(Mode::Region), "r", "region"),
     (ToolbarItem::Mode(Mode::Window), "w", "window"),
     (ToolbarItem::Mode(Mode::Screen), "s", "screen"),
+    (ToolbarItem::Mode(Mode::Freeform), "f", "free"),
     (ToolbarItem::Tool(Tool::Draw), "d", "draw"),
     (ToolbarItem::Tool(Tool::Record), "v", "video"),
     (ToolbarItem::Tool(Tool::Text), "t", "text"),
@@ -239,6 +242,8 @@ pub struct OverlayOutcome {
     pub color: Option<[u8; 3]>,
     /// With the draw tool the overlay stays on screen, for the markup window to take over.
     pub held_window: Option<HWND>,
+    /// The path a freeform drag took, in desktop pixels.
+    pub outline: Option<Vec<(i32, i32)>>,
 }
 
 struct Brushes {
@@ -286,6 +291,9 @@ struct OverlayState {
     /// With start-and-end particles the overlay stays a moment so the last burst shows.
     close_at: Option<Instant>,
     shutter_on_release: bool,
+    /// The path of the freeform drag going on, in desktop pixels.
+    freeform_path: Vec<(i32, i32)>,
+    finished_outline: Option<Vec<(i32, i32)>>,
 }
 
 const PARTICLE_TIMER: usize = 7;
@@ -375,6 +383,7 @@ pub fn select_area(graphics: &Graphics, screenshot: &Screenshot, options: Overla
     }
     Ok(OverlayOutcome {
         held_window: keep_on_screen.then_some(hwnd),
+        outline: state.finished_outline.take(),
         selection: state.selection,
         first_frame_at: state.first_frame_at,
         tool: state.tool,
@@ -438,6 +447,18 @@ pub struct PreviewScene {
     pub finishing: bool,
 }
 
+/// How far, in pixels, the pointer moves before a freeform path gets its next point.
+const FREEFORM_STEP: i32 = 3;
+
+/// The smallest rectangle around the points.
+fn bounds_of(points: &[(i32, i32)]) -> Option<PixelRect> {
+    let left = points.iter().map(|point| point.0).min()?;
+    let right = points.iter().map(|point| point.0).max()?;
+    let top = points.iter().map(|point| point.1).min()?;
+    let bottom = points.iter().map(|point| point.1).max()?;
+    Some(PixelRect::from_edges(left, top, right, bottom))
+}
+
 /// Draws the overlay into memory and returns BGRA pixels the size of the screenshot.
 /// COM must be initialised on this thread.
 pub fn render_offscreen(graphics: &Graphics, screenshot: &Screenshot, scene: PreviewScene) -> Result<Vec<u8>> {
@@ -461,6 +482,9 @@ pub fn render_offscreen(graphics: &Graphics, screenshot: &Screenshot, scene: Pre
     let mut state = OverlayState::new(graphics, screenshot, target, scene.window_rects, scene.mode, scene.cursor)?;
     state.press_point = scene.drag_from;
     state.dragging = scene.drag_from.is_some();
+    if scene.mode == Mode::Freeform {
+        state.freeform_path = scene.trail.clone();
+    }
     if !scene.trail.is_empty() {
         let mut particles = ParticleSystem::new(0x5EED);
         for point in &scene.trail {
@@ -603,12 +627,17 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, message: u32, wparam: WPARAM,
             state.cursor = state.to_screen(lparam);
             if let Some(press_point) = state.press_point {
                 let moved = (state.cursor.0 - press_point.0).abs() + (state.cursor.1 - press_point.1).abs();
-                if state.mode == Mode::Region && state.tool != Tool::Color && moved > 3 && !state.dragging {
+                let drags_an_area = matches!(state.mode, Mode::Region | Mode::Freeform);
+                if drags_an_area && state.tool != Tool::Color && moved > 3 && !state.dragging {
                     state.dragging = true;
+                    state.freeform_path = vec![press_point];
                     if state.particle_mode == ParticleMode::StartAndEnd {
                         state.burst_particles(hwnd, press_point);
                     }
                 }
+            }
+            if state.dragging && state.mode == Mode::Freeform {
+                state.extend_freeform_path();
             }
             if state.dragging && state.particle_mode == ParticleMode::WhileDragging {
                 state.trail_particles(hwnd);
@@ -718,6 +747,8 @@ impl OverlayState {
             snap_to_windows: true,
             close_at: None,
             shutter_on_release: false,
+            freeform_path: Vec::new(),
+            finished_outline: None,
         })
     }
 
@@ -789,6 +820,9 @@ impl OverlayState {
         if self.tool == Tool::Color {
             return None;
         }
+        if self.dragging && self.mode == Mode::Freeform {
+            return bounds_of(&self.freeform_path)?.intersect(&self.screenshot().bounds);
+        }
         if self.dragging {
             let start = self.press_point?;
             let rect = PixelRect::from_edges(start.0, start.1, self.cursor.0, self.cursor.1);
@@ -796,12 +830,23 @@ impl OverlayState {
         }
         match self.mode {
             Mode::Screen => Some(self.current_monitor()),
+            Mode::Freeform => None,
             Mode::Region if !self.snap_to_windows => None,
             Mode::Region | Mode::Window => self
                 .window_rects
                 .iter()
                 .find(|rect| rect.contains(self.cursor.0, self.cursor.1))
                 .and_then(|rect| rect.intersect(&self.screenshot().bounds)),
+        }
+    }
+
+    /// Adds the pointer to the path, skipping moves too small to change the shape.
+    fn extend_freeform_path(&mut self) {
+        let is_far_enough = self.freeform_path.last().is_none_or(|last| {
+            (last.0 - self.cursor.0).abs() + (last.1 - self.cursor.1).abs() >= FREEFORM_STEP
+        });
+        if is_far_enough {
+            self.freeform_path.push(self.cursor);
         }
     }
 
@@ -813,6 +858,9 @@ impl OverlayState {
         }
         let picked = self.highlighted();
         let was_dragging = self.dragging;
+        if was_dragging && self.mode == Mode::Freeform && self.freeform_path.len() >= 3 {
+            self.finished_outline = Some(std::mem::take(&mut self.freeform_path));
+        }
         self.press_point = None;
         self.dragging = false;
         if let Some(rect) = picked {
@@ -864,6 +912,7 @@ impl OverlayState {
             key if key == u16::from(b'R') => self.set_mode(Mode::Region),
             key if key == u16::from(b'W') => self.set_mode(Mode::Window),
             key if key == u16::from(b'S') => self.set_mode(Mode::Screen),
+            key if key == u16::from(b'F') => self.set_mode(Mode::Freeform),
             key if key == u16::from(b'D') && self.extra_tools => {
                 self.toggle_tool(Tool::Draw);
                 self.paint();
@@ -941,12 +990,20 @@ impl OverlayState {
             return;
         }
         let highlighted = self.highlighted();
-        self.draw_shade(highlighted);
-        if let Some(rect) = highlighted {
-            self.draw_frame(rect);
-            self.draw_size_label(rect);
+        if self.dragging && self.mode == Mode::Freeform {
+            self.draw_shade(None);
+            self.draw_freeform_path();
+            if let Some(rect) = highlighted {
+                self.draw_size_label(rect);
+            }
+        } else {
+            self.draw_shade(highlighted);
+            if let Some(rect) = highlighted {
+                self.draw_frame(rect);
+                self.draw_size_label(rect);
+            }
         }
-        let wants_crosshair = self.mode == Mode::Region || self.tool == Tool::Color;
+        let wants_crosshair = matches!(self.mode, Mode::Region | Mode::Freeform) || self.tool == Tool::Color;
         if self.show_crosshair && wants_crosshair && !self.dragging {
             self.draw_crosshair();
         }
@@ -964,6 +1021,40 @@ impl OverlayState {
         }
         unsafe {
             let _ = target.EndDraw(None, None);
+        }
+    }
+
+    /// The inside of the path shows the desktop at full brightness, like the hole of a region.
+    fn draw_freeform_path(&self) {
+        if self.freeform_path.len() < 2 {
+            return;
+        }
+        let points: Vec<Vector2> = self
+            .freeform_path
+            .iter()
+            .map(|point| {
+                let (x, y) = self.to_client(point.0, point.1);
+                Vector2 { X: x, Y: y }
+            })
+            .collect();
+        let graphics = self.graphics();
+        unsafe {
+            let Ok(geometry) = graphics.d2d.CreatePathGeometry() else {
+                return;
+            };
+            let Ok(sink) = geometry.Open() else {
+                return;
+            };
+            sink.BeginFigure(points[0], D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddLines(&points[1..]);
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            if sink.Close().is_err() {
+                return;
+            }
+            if let Ok(desktop) = self.target.CreateBitmapBrush(&self.bitmap, None, None) {
+                self.target.FillGeometry(&geometry, &desktop, None);
+            }
+            self.target.DrawGeometry(&geometry, &self.brushes.accent, 1.5, None);
         }
     }
 
@@ -1414,5 +1505,18 @@ pub(crate) fn mode_icon(mode: Mode) -> char {
         Mode::Region => crate::icons::REGION,
         Mode::Window => crate::icons::WINDOW,
         Mode::Screen => crate::icons::SCREEN,
+        Mode::Freeform => crate::icons::FREEFORM,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_freeform_path_is_bounded_by_its_extremes() {
+        let bounds = bounds_of(&[(10, 20), (50, 5), (30, 90)]).unwrap();
+        assert_eq!((bounds.left, bounds.top, bounds.right(), bounds.bottom()), (10, 5, 50, 90));
+        assert!(bounds_of(&[]).is_none());
     }
 }

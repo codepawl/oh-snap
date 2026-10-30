@@ -37,10 +37,10 @@ use crate::capture::{Capturer, PixelRect, Screenshot};
 use crate::output::Image;
 
 /// Media Foundation counts time in units of 100 nanoseconds.
-const TICKS_PER_SECOND: i64 = 10_000_000;
-const AUDIO_RATE: u32 = 48_000;
-const AUDIO_CHANNELS: u32 = 2;
-const AUDIO_BYTES_PER_FRAME: u32 = 4;
+pub(crate) const TICKS_PER_SECOND: i64 = 10_000_000;
+pub(crate) const AUDIO_RATE: u32 = 48_000;
+pub(crate) const AUDIO_CHANNELS: u32 = 2;
+pub(crate) const AUDIO_BYTES_PER_FRAME: u32 = 4;
 const AAC_BYTES_PER_SECOND: u32 = 24_000;
 /// Screen content is mostly still, so this is plenty and keeps files small.
 const BITS_PER_PIXEL_FRAME: f64 = 0.12;
@@ -101,6 +101,11 @@ pub fn clock_text(milliseconds: u64) -> String {
         return format!("{}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60);
     }
     format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+/// "0:12.3": a clock with tenths, for choosing where to cut.
+pub fn clock_text_precise(milliseconds: u64) -> String {
+    format!("{}.{}", clock_text(milliseconds), milliseconds / 100 % 10)
 }
 
 /// Windows' own folder for recordings, so Photos and Explorer list ours too.
@@ -263,7 +268,7 @@ fn even_area(area: PixelRect, screenshot: &Screenshot) -> Result<PixelRect> {
     Ok(PixelRect { width, height, ..area })
 }
 
-fn open_writer(path: &Path) -> Result<IMFSinkWriter> {
+pub(crate) fn open_writer(path: &Path) -> Result<IMFSinkWriter> {
     unsafe {
         let mut attributes = None;
         MFCreateAttributes(&mut attributes, 1)?;
@@ -277,7 +282,7 @@ fn pair(high: u32, low: u32) -> u64 {
     (u64::from(high) << 32) | u64::from(low)
 }
 
-fn add_video_stream(writer: &IMFSinkWriter, area: PixelRect, frames_per_second: u32) -> Result<u32> {
+pub(crate) fn add_video_stream(writer: &IMFSinkWriter, area: PixelRect, frames_per_second: u32) -> Result<u32> {
     let width = area.width as u32;
     let height = area.height as u32;
     let bitrate = f64::from(width) * f64::from(height) * f64::from(frames_per_second) * BITS_PER_PIXEL_FRAME;
@@ -306,7 +311,7 @@ fn add_video_stream(writer: &IMFSinkWriter, area: PixelRect, frames_per_second: 
     }
 }
 
-fn add_audio_stream(writer: &IMFSinkWriter) -> Result<u32> {
+pub(crate) fn add_audio_stream(writer: &IMFSinkWriter) -> Result<u32> {
     let set_common = |media_type: &IMFMediaType| -> Result<()> {
         unsafe {
             media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
@@ -336,7 +341,7 @@ fn duration_ticks(duration: Duration) -> i64 {
     (duration.as_secs_f64() * TICKS_PER_SECOND as f64) as i64
 }
 
-fn bytes_sample(bytes: &[u8], time_ticks: i64, duration_ticks: i64) -> Result<IMFSample> {
+pub(crate) fn bytes_sample(bytes: &[u8], time_ticks: i64, duration_ticks: i64) -> Result<IMFSample> {
     unsafe {
         let buffer = MFCreateMemoryBuffer(bytes.len() as u32)?;
         let mut destination = std::ptr::null_mut();
@@ -840,6 +845,7 @@ mod tests {
         assert_eq!(clock_text(12_400), "0:12");
         assert_eq!(clock_text(83_000), "1:23");
         assert_eq!(clock_text(3_723_000), "1:02:03");
+        assert_eq!(clock_text_precise(12_345), "0:12.3");
     }
 
     #[test]

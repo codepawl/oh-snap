@@ -108,6 +108,7 @@ enum Action {
     OpenFolder,
     Edit,
     Gif,
+    Trim,
 }
 
 static mut CURRENT_CARD: HWND = HWND(std::ptr::null_mut());
@@ -549,6 +550,7 @@ impl CardState {
                 }
                 Action::Edit => crate::daemon::open_editor(self.graphics(), path.to_path_buf()),
                 Action::Gif => crate::daemon::make_gif(path),
+                Action::Trim => crate::daemon::open_trim(path),
             }
         }
     }
@@ -611,7 +613,7 @@ impl CardState {
                     _ => ("", None),
                 };
                 let headline = match &self.message {
-                    CardMessage::Recorded { milliseconds, .. } => format!("recorded · {}", crate::recorder::clock_text(*milliseconds)),
+                    CardMessage::Recorded { milliseconds, .. } => crate::recorder::clock_text(*milliseconds),
                     _ => headline.to_string(),
                 };
                 let headline = headline.as_str();
@@ -620,12 +622,13 @@ impl CardState {
                 if let Some(path) = path {
                     let file_name = path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
                     let mut right = width - PADDING;
-                    let last_action = if matches!(self.message, CardMessage::Recorded { .. }) {
-                        (Action::Gif, crate::icons::IMAGE, "gif")
+                    let mut actions = vec![(Action::OpenFolder, crate::icons::FOLDER, "folder")];
+                    if matches!(self.message, CardMessage::Recorded { .. }) {
+                        actions.push((Action::Gif, crate::icons::IMAGE, "gif"));
+                        actions.push((Action::Trim, crate::icons::CROP, "trim"));
                     } else {
-                        (Action::Edit, crate::icons::EDIT, "edit")
-                    };
-                    let actions = [(Action::OpenFolder, crate::icons::FOLDER, "folder"), last_action];
+                        actions.push((Action::Edit, crate::icons::EDIT, "edit"));
+                    }
                     for (action, icon, label) in actions {
                         let (label_width, _) = self.graphics().measure(label);
                         let button = D2D_RECT_F {

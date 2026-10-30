@@ -123,7 +123,7 @@ fn gif_size(shown_size: (u32, u32)) -> (u32, u32) {
     (LARGEST_WIDTH, (scaled_height as u32).max(1))
 }
 
-fn open_reader(recording: &Path, video_stream: u32) -> ExportResult<IMFSourceReader> {
+pub(crate) fn open_reader(recording: &Path, video_stream: u32) -> ExportResult<IMFSourceReader> {
     unsafe {
         let mut attributes = None;
         MFCreateAttributes(&mut attributes, 1)?;
@@ -141,14 +141,14 @@ fn open_reader(recording: &Path, video_stream: u32) -> ExportResult<IMFSourceRea
     }
 }
 
-struct FrameLayout {
+pub(crate) struct FrameLayout {
     /// The part to show. H.264 codes 1080 rows as 1088, and the aperture says which is the picture.
-    shown: (u32, u32),
+    pub(crate) shown: (u32, u32),
     /// Bytes from one row to the next. Negative when the rows run bottom to top.
     stride: i32,
 }
 
-fn frame_layout(reader: &IMFSourceReader, video_stream: u32) -> ExportResult<FrameLayout> {
+pub(crate) fn frame_layout(reader: &IMFSourceReader, video_stream: u32) -> ExportResult<FrameLayout> {
     unsafe {
         let media_type = reader.GetCurrentMediaType(video_stream)?;
         let packed = media_type.GetUINT64(&MF_MT_FRAME_SIZE)?;
@@ -172,9 +172,18 @@ fn frame_layout(reader: &IMFSourceReader, video_stream: u32) -> ExportResult<Fra
     }
 }
 
-/// One decoded frame as top-down RGBA at the GIF's size. The stride's sign covers both
-/// row orders.
+/// One decoded frame as top-down RGBA at the GIF's size.
 fn read_picture(buffer: &IMFMediaBuffer, layout: &FrameLayout, gif_size: (u32, u32)) -> ExportResult<Vec<u8>> {
+    read_frame(buffer, layout, |top_row, pitch| scale_to_rgba(top_row, pitch, layout.shown, gif_size))
+}
+
+/// Hands `use_rows` the frame's top row and the step to the next one. The stride's sign
+/// covers both row orders.
+pub(crate) fn read_frame<T>(
+    buffer: &IMFMediaBuffer,
+    layout: &FrameLayout,
+    use_rows: impl FnOnce(*const u8, isize) -> T,
+) -> ExportResult<T> {
     let mut start = std::ptr::null_mut();
     let mut length = 0;
     unsafe { buffer.Lock(&mut start, None, Some(&mut length))? };
@@ -188,7 +197,7 @@ fn read_picture(buffer: &IMFMediaBuffer, layout: &FrameLayout, gif_size: (u32, u
         } else {
             start
         };
-        Ok(scale_to_rgba(top_row, layout.stride as isize, layout.shown, gif_size))
+        Ok(use_rows(top_row, layout.stride as isize))
     };
     unsafe { buffer.Unlock()? };
     result

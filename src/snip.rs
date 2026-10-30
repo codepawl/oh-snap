@@ -30,6 +30,8 @@ pub struct SnipOutcome {
 /// What the user picked on the overlay.
 pub enum Picked {
     Area(PixelRect),
+    /// The bounding area of a freeform path, and the path in desktop pixels.
+    Freeform { area: PixelRect, outline: Vec<(i32, i32)> },
     /// Read the text in this area instead of keeping the image.
     Text(PixelRect),
     /// A pixel's red, green and blue.
@@ -67,7 +69,9 @@ pub fn pick(
         return Ok(Some(Picked::Color(color)));
     }
     let held_window = outcome.held_window;
+    let outline = outcome.outline;
     Ok(outcome.selection.map(|area| match (outcome.tool, held_window) {
+        (Tool::Snip, _) if outline.is_some() => Picked::Freeform { area, outline: outline.unwrap_or_default() },
         (Tool::Draw, Some(held_window)) => Picked::Draw { area, held_window },
         (Tool::Text, _) => Picked::Text(area),
         (Tool::Record, _) => Picked::Record(area),
@@ -79,6 +83,10 @@ pub fn pick(
 pub fn run(capturer: &mut Capturer, graphics: &Graphics, owner: Option<HWND>, request: &SnipRequest) -> SnipResult {
     match pick(capturer, graphics, request, false, Tool::Snip)? {
         Some(Picked::Area(area)) => deliver(capturer, owner, request, area).map(Some),
+        Some(Picked::Freeform { area, outline }) => {
+            let image = crop_outlined(capturer, area, Some(&outline))?;
+            deliver_image(owner, request, image, area).map(Some)
+        }
         // The toolbar here offers only the plain snip.
         Some(Picked::Text(_) | Picked::Color(_) | Picked::Record(_) | Picked::Draw { .. }) | None => Ok(None),
     }
@@ -101,6 +109,20 @@ pub fn run_area(capturer: &mut Capturer, owner: Option<HWND>, request: &SnipRequ
 /// The picked area as an image, from the frame the overlay showed.
 pub fn crop(capturer: &Capturer, area: PixelRect) -> Result<Image, Box<dyn std::error::Error>> {
     Ok(output::crop(capturer.screenshot(), area).ok_or("the selected area is off screen")?)
+}
+
+/// The picked area, cleared outside the freeform path when there is one.
+pub fn crop_outlined(capturer: &Capturer, area: PixelRect, outline: Option<&[(i32, i32)]>) -> Result<Image, Box<dyn std::error::Error>> {
+    let mut image = crop(capturer, area)?;
+    if let Some(outline) = outline {
+        let origin = area.intersect(&capturer.screenshot().bounds).unwrap_or(area);
+        let in_image: Vec<(f32, f32)> = outline
+            .iter()
+            .map(|point| ((point.0 - origin.left) as f32, (point.1 - origin.top) as f32))
+            .collect();
+        output::keep_inside(&mut image, &in_image);
+    }
+    Ok(image)
 }
 
 /// Clipboard and file for an area of the last capture, as the settings say.

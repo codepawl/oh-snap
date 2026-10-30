@@ -2,6 +2,7 @@
 //! Windows 10), picked by eye from `oh-snap preview`'s glyphs.png.
 
 pub const REGION: char = '\u{F407}';
+pub const FREEFORM: char = '\u{F408}';
 pub const WINDOW: char = '\u{E737}';
 pub const SCREEN: char = '\u{E7F4}';
 

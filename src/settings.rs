@@ -204,6 +204,7 @@ pub fn mode_name(mode: Mode) -> &'static str {
         Mode::Region => "region",
         Mode::Window => "window",
         Mode::Screen => "screen",
+        Mode::Freeform => "freeform",
     }
 }
 

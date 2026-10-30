@@ -52,6 +52,51 @@ pub fn run(folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", path.display());
     }
 
+    let freeform_path: Vec<(i32, i32)> = (0..80)
+        .map(|step| {
+            let angle = step as f32 / 80.0 * std::f32::consts::TAU;
+            let radius = 170.0 + 40.0 * (angle * 5.0).sin();
+            (540 + (radius * 1.5 * angle.cos()) as i32, 400 + (radius * angle.sin()) as i32)
+        })
+        .collect();
+    let freeform_scene = PreviewScene {
+        mode: Mode::Freeform,
+        cursor: *freeform_path.last().unwrap_or(&(540, 400)),
+        drag_from: freeform_path.first().copied(),
+        window_rects: windows.clone(),
+        trail: freeform_path.clone(),
+        finishing: false,
+    };
+    let freeform_pixels = overlay::render_offscreen(&graphics, &screenshot, freeform_scene)?;
+    let freeform_frame = Image {
+        width: WIDTH as u32,
+        height: screenshot.bounds.height as u32,
+        bgra: freeform_pixels,
+    };
+    let freeform_frame_path = folder.join("freeform.png");
+    output::write_png_to(&output::encode_png(&freeform_frame)?, &freeform_frame_path)?;
+    println!("{}", freeform_frame_path.display());
+    if let Some(area) = bounds_for_preview(&freeform_path) {
+        if let Some(mut result) = output::crop(&screenshot, area) {
+            let in_image: Vec<(f32, f32)> = freeform_path
+                .iter()
+                .map(|point| ((point.0 - area.left) as f32, (point.1 - area.top) as f32))
+                .collect();
+            output::keep_inside(&mut result, &in_image);
+            let result_path = folder.join("freeform-result.png");
+            output::write_png_to(&output::encode_png(&result)?, &result_path)?;
+            println!("{}", result_path.display());
+        }
+    }
+
+    // Needs a real video, so it only runs when one is named. The build server has none.
+    if let Ok(recording) = std::env::var("OH_SNAP_PREVIEW_RECORDING") {
+        let (pixels, width, height) = crate::trim_window::render_offscreen(&graphics, std::path::Path::new(&recording))?;
+        let path = folder.join("trim.png");
+        output::write_png_to(&output::encode_png(&Image { width, height, bgra: pixels })?, &path)?;
+        println!("{}", path.display());
+    }
+
     let finishing = PreviewScene {
         mode: Mode::Region,
         cursor: (1130, 640),
@@ -297,4 +342,12 @@ fn write_glyph_sheet(graphics: &Graphics, folder: &Path) -> Result<(), Box<dyn s
     output::write_png_to(&output::encode_png(&Image { width, height, bgra: pixels })?, &path)?;
     println!("{}", path.display());
     Ok(())
+}
+
+fn bounds_for_preview(points: &[(i32, i32)]) -> Option<crate::capture::PixelRect> {
+    let left = points.iter().map(|point| point.0).min()?;
+    let right = points.iter().map(|point| point.0).max()?;
+    let top = points.iter().map(|point| point.1).min()?;
+    let bottom = points.iter().map(|point| point.1).max()?;
+    Some(crate::capture::PixelRect::from_edges(left, top, right, bottom))
 }
