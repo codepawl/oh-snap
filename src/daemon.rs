@@ -278,7 +278,7 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
             LRESULT(0)
         }
         MESSAGE_TEXT_READ => {
-            let result = unsafe { Box::from_raw(lparam.0 as *mut std::result::Result<String, String>) };
+            let result = unsafe { Box::from_raw(lparam.0 as *mut std::result::Result<crate::ocr::Reading, String>) };
             daemon.on_text_read(hwnd, *result);
             LRESULT(0)
         }
@@ -566,6 +566,7 @@ impl Daemon {
         let options = crate::recorder::RecordOptions {
             frames_per_second: self.settings.record_frames_per_second,
             system_sound: self.settings.record_system_sound,
+            microphone: self.settings.record_microphone,
         };
         let window = hwnd.0 as isize;
         let controls = crate::recorder::start(area, options, move |result| {
@@ -658,14 +659,19 @@ impl Daemon {
     }
 
     /// Text from the overlay's text tool: on the clipboard, with a card that says so.
-    fn on_text_read(&mut self, hwnd: HWND, result: std::result::Result<String, String>) {
+    fn on_text_read(&mut self, hwnd: HWND, result: std::result::Result<crate::ocr::Reading, String>) {
+        use crate::ocr::Reading;
         let message = match result {
-            Ok(text) if text.trim().is_empty() => CardMessage::Notice {
+            Ok(Reading::Text(text)) if text.trim().is_empty() => CardMessage::Notice {
                 title: "no text found".into(),
                 detail: "the clipboard stays as it was".into(),
             },
-            Ok(text) => match crate::output::copy_text_to_clipboard(Some(hwnd), &text) {
+            Ok(Reading::Text(text)) => match crate::output::copy_text_to_clipboard(Some(hwnd), &text) {
                 Ok(()) => text_card(&text),
+                Err(error) => CardMessage::Failed(error.message()),
+            },
+            Ok(Reading::QrCode(payload)) => match crate::output::copy_text_to_clipboard(Some(hwnd), &payload) {
+                Ok(()) => CardMessage::QrCode(payload),
                 Err(error) => CardMessage::Failed(error.message()),
             },
             Err(error) => {
@@ -739,7 +745,7 @@ impl Daemon {
 fn start_reading_text(hwnd: HWND, image: crate::output::Image) {
     let window = hwnd.0 as isize;
     std::thread::spawn(move || {
-        let result = Box::new(crate::ocr::read_text(&image));
+        let result = Box::new(crate::ocr::read(&image));
         unsafe {
             let _ = PostMessageW(Some(HWND(window as *mut _)), MESSAGE_TEXT_READ, WPARAM(0), LPARAM(Box::into_raw(result) as isize));
         }

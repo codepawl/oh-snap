@@ -87,7 +87,7 @@ pub fn run(folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", path.display());
     }
     let failed = CardMessage::Failed("the selected area is off screen".into());
-    for (name, image, message) in [("card-saved", Some(&snipped), saved), ("card-failed", None, failed), ("card-color", None, CardMessage::Color([0xD9, 0x77, 0x57])), ("card-recorded", Some(&snipped), CardMessage::Recorded { path: PathBuf::from(r"C:\Users\you\Videos\Screen Recordings\Screen Recording 2026-10-30 180000.mp4"), milliseconds: 83_000 })] {
+    for (name, image, message) in [("card-saved", Some(&snipped), saved), ("card-failed", None, failed), ("card-color", None, CardMessage::Color([0xD9, 0x77, 0x57])), ("card-qr", None, CardMessage::QrCode("https://github.com/codepawl/oh-snap".into())), ("card-recorded", Some(&snipped), CardMessage::Recorded { path: PathBuf::from(r"C:\Users\you\Videos\Screen Recordings\Screen Recording 2026-10-30 180000.mp4"), milliseconds: 83_000 })] {
         let (pixels, width, height) = card::render_offscreen(&graphics, image, message)?;
         let card_image = Image { width, height, bgra: pixels };
         let path = folder.join(format!("{name}.png"));

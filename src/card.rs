@@ -70,6 +70,8 @@ pub enum CardMessage {
     Recent { path: PathBuf },
     /// A finished recording, with its first frame as the thumbnail.
     Recorded { path: PathBuf, milliseconds: u64 },
+    /// A QR code's payload, on the clipboard. Clicking the card opens it when it is a web link.
+    QrCode(String),
     /// A colour from the overlay's colour tool, with its hex value on the clipboard.
     Color([u8; 3]),
     Failed(String),
@@ -437,7 +439,7 @@ impl CardState {
             CardMessage::Saved { path, .. } => path.as_deref(),
             CardMessage::Recent { path } => Some(path),
             CardMessage::Recorded { path, .. } => Some(path),
-            CardMessage::Failed(_) | CardMessage::Countdown(_) | CardMessage::Notice { .. } | CardMessage::Color(_) => None,
+            CardMessage::Failed(_) | CardMessage::Countdown(_) | CardMessage::Notice { .. } | CardMessage::Color(_) | CardMessage::QrCode(_) => None,
         }
     }
 
@@ -525,6 +527,14 @@ impl CardState {
     }
 
     fn run(&self, action: Action) {
+        if let CardMessage::QrCode(payload) = &self.message {
+            if is_web_link(payload) {
+                unsafe {
+                    ShellExecuteW(None, w!("open"), &HSTRING::from(payload.as_str()), None, None, SW_SHOWNORMAL);
+                }
+            }
+            return;
+        }
         let Some(path) = self.saved_path() else {
             return;
         };
@@ -642,6 +652,12 @@ impl CardState {
                 draw_mark(&target, Mark::Cross, PADDING, line_top, mark_brush);
                 self.text(&target, "snip failed", PADDING + 16.0, line_top, &text);
                 self.text(&target, reason, PADDING + 16.0, line_top + LINE_HEIGHT, &dim);
+            }
+            CardMessage::QrCode(payload) => {
+                draw_mark(&target, Mark::Check, PADDING, line_top, &accent);
+                let headline = if is_web_link(payload) { "QR code copied · click to open" } else { "QR code copied" };
+                self.text(&target, headline, PADDING + 16.0, line_top, &text);
+                self.text(&target, payload, PADDING + 16.0, line_top + LINE_HEIGHT, &dim);
             }
             CardMessage::Color(rgb) => {
                 let swatch = D2D1_ROUNDED_RECT {
@@ -839,6 +855,12 @@ fn draw_countdown_ring(
     }
 }
 
+/// Only web links open on a click: a QR code can hold anything, such as a command.
+fn is_web_link(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://")) && !text.chars().any(char::is_whitespace)
+}
+
 enum Mark {
     Check,
     Cross,
@@ -862,5 +884,20 @@ fn draw_mark(target: &ID2D1RenderTarget, mark: Mark, left: f32, line_top: f32, b
                 None,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_web_links_count_as_links() {
+        assert!(is_web_link("https://github.com/codepawl/oh-snap"));
+        assert!(is_web_link("HTTP://example.com"));
+        assert!(!is_web_link("file:///C:/Windows/system32/calc.exe"));
+        assert!(!is_web_link("cmd.exe /c del"));
+        assert!(!is_web_link("https://example.com and more"));
+        assert!(!is_web_link("WIFI:S:home;T:WPA;P:secret;;"));
     }
 }

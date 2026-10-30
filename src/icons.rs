@@ -23,6 +23,7 @@ pub const ADD_ONS: char = '\u{E945}';
 
 pub const CAMERA: char = '\u{E722}';
 pub const VIDEO: char = '\u{E714}';
+pub const MICROPHONE: char = '\u{E720}';
 pub const PLAY: char = '\u{E768}';
 pub const PAUSE: char = '\u{E769}';
 pub const STOP: char = '\u{E71A}';

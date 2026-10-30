@@ -14,8 +14,8 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
-    WAVE_FORMAT_PCM, WAVEFORMATEX, eConsole, eRender,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, EDataFlow, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
+    MMDeviceEnumerator, WAVE_FORMAT_PCM, WAVEFORMATEX, eCapture, eConsole, eRender,
 };
 use windows::Win32::Media::MediaFoundation::{
     IMFMediaType, IMFSample, IMFSinkWriter, MF_MT_AAC_PAYLOAD_TYPE, MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
@@ -46,11 +46,14 @@ const AAC_BYTES_PER_SECOND: u32 = 24_000;
 const BITS_PER_PIXEL_FRAME: f64 = 0.12;
 /// Encoders refuse anything smaller.
 const SMALLEST_SIDE: i32 = 16;
+/// How far the sound stays behind the picture, so a source that delivers late still mixes in.
+const SOUND_HELD_BACK: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug)]
 pub struct RecordOptions {
     pub frames_per_second: u32,
     pub system_sound: bool,
+    pub microphone: bool,
 }
 
 /// Shared with the thread that records: set these and it follows.
@@ -155,7 +158,8 @@ fn record_started(area: PixelRect, options: RecordOptions, path: &Path, controls
     let frames_per_second = options.frames_per_second.max(1);
     let writer = open_writer(path)?;
     let video_stream = add_video_stream(&writer, area, frames_per_second)?;
-    let audio_stream = if options.system_sound { add_audio_stream(&writer).ok() } else { None };
+    let wants_sound = options.system_sound || options.microphone;
+    let audio_stream = if wants_sound { add_audio_stream(&writer).ok() } else { None };
     let mut canvas = Canvas::new(area)?;
     unsafe { writer.BeginWriting()? };
 
@@ -169,16 +173,7 @@ fn record_started(area: PixelRect, options: RecordOptions, path: &Path, controls
         std::thread::sleep(Duration::from_millis(5));
     }
 
-    let mut sound = match audio_stream {
-        Some(stream) => match LoopbackSound::start(stream) {
-            Ok(sound) => Some(sound),
-            Err(error) => {
-                crate::log::write(&format!("recording without sound: {}", error.message()));
-                None
-            }
-        },
-        None => None,
-    };
+    let mut sound = audio_stream.and_then(|stream| SoundMixer::start(stream, options));
     let has_sound = sound.is_some();
     let frame_time = Duration::from_secs_f64(1.0 / f64::from(frames_per_second));
     let started = Instant::now();
@@ -228,7 +223,7 @@ fn record_started(area: PixelRect, options: RecordOptions, path: &Path, controls
         let sample = bytes_sample(canvas.pixels(), ticks, duration_ticks(frame_time))?;
         unsafe { writer.WriteSample(video_stream, &sample)? };
         if let Some(sound) = sound.as_mut() {
-            if let Err(error) = sound.drain(&writer, timeline) {
+            if let Err(error) = sound.drain(&writer, timeline, SOUND_HELD_BACK) {
                 crate::log::write(&format!("sound stopped: {}", error.message()));
             }
         }
@@ -242,7 +237,7 @@ fn record_started(area: PixelRect, options: RecordOptions, path: &Path, controls
 
     let duration = started.elapsed().saturating_sub(paused_for);
     if let Some(sound) = sound.as_mut() {
-        let _ = sound.drain(&writer, duration);
+        let _ = sound.drain(&writer, duration, Duration::ZERO);
         sound.stop();
     }
     unsafe { writer.Finalize()? };
@@ -501,18 +496,56 @@ impl Drop for Canvas {
     }
 }
 
-/// What the speakers play, through WASAPI loopback, as one unbroken stream. Windows sends
-/// nothing while no app makes a sound, so silence fills those gaps to keep sound and
-/// picture together.
-struct LoopbackSound {
-    stream: u32,
-    client: IAudioClient,
-    capture: IAudioCaptureClient,
-    frames_written: u64,
+/// One source's samples waiting to be mixed, as interleaved 16-bit stereo.
+#[derive(Default)]
+struct SampleQueue {
+    samples: std::collections::VecDeque<i16>,
 }
 
-impl LoopbackSound {
-    fn start(stream: u32) -> Result<Self> {
+impl SampleQueue {
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        let samples = bytes.chunks_exact(2).map(|pair| i16::from_le_bytes([pair[0], pair[1]]));
+        self.samples.extend(samples);
+    }
+
+    fn push_silence(&mut self, frames: usize) {
+        self.samples.extend(std::iter::repeat_n(0, frames * AUDIO_CHANNELS as usize));
+    }
+
+    /// A source that runs ahead of the timeline loses its oldest sound, so it cannot drift.
+    fn drop_backlog(&mut self, largest_frames: usize) {
+        let largest_samples = largest_frames * AUDIO_CHANNELS as usize;
+        let extra = self.samples.len().saturating_sub(largest_samples);
+        self.samples.drain(..extra);
+    }
+
+    fn pop(&mut self) -> i16 {
+        self.samples.pop_front().unwrap_or(0)
+    }
+}
+
+/// Adds the queues into `frames` frames as little-endian bytes. A queue that runs out counts
+/// as silence, and loud sums clip instead of wrapping around.
+fn mix(queues: &mut [SampleQueue], frames: usize) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(frames * AUDIO_BYTES_PER_FRAME as usize);
+    for _ in 0..frames * AUDIO_CHANNELS as usize {
+        let sum: i32 = queues.iter_mut().map(|queue| i32::from(queue.pop())).sum();
+        let clipped = sum.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+        bytes.extend_from_slice(&clipped.to_le_bytes());
+    }
+    bytes
+}
+
+/// One Windows audio stream, opened in the format the file needs. Windows converts from
+/// whatever the device runs at.
+struct SoundSource {
+    client: IAudioClient,
+    capture: IAudioCaptureClient,
+    queue: SampleQueue,
+}
+
+impl SoundSource {
+    fn open(data_flow: EDataFlow, extra_flags: u32) -> Result<Self> {
         let format = WAVEFORMATEX {
             wFormatTag: WAVE_FORMAT_PCM as u16,
             nChannels: AUDIO_CHANNELS as u16,
@@ -524,83 +557,123 @@ impl LoopbackSound {
         };
         unsafe {
             let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-            let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
+            let device = enumerator.GetDefaultAudioEndpoint(data_flow, eConsole)?;
             let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
-            // Windows converts from whatever the device runs at.
-            let flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+            let flags = extra_flags | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
             client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, TICKS_PER_SECOND, 0, &format, None)?;
             let capture: IAudioCaptureClient = client.GetService()?;
             client.Start()?;
             Ok(Self {
-                stream,
                 client,
                 capture,
-                frames_written: 0,
+                queue: SampleQueue::default(),
             })
         }
     }
 
-    /// Drops what arrived during a pause.
-    fn throw_away(&mut self) {
-        unsafe {
-            while self.capture.GetNextPacketSize().is_ok_and(|size| size > 0) {
-                let mut data = std::ptr::null_mut();
-                let mut frames = 0;
-                let mut flags = 0;
-                if self.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None).is_err() {
-                    return;
-                }
-                let _ = self.capture.ReleaseBuffer(frames);
-            }
-        }
-    }
-
-    /// Writes all sound that has arrived, plus silence up to `timeline` when none has.
-    fn drain(&mut self, writer: &IMFSinkWriter, timeline: Duration) -> Result<()> {
+    /// Moves what Windows has ready into the queue.
+    fn collect(&mut self) -> Result<()> {
         unsafe {
             while self.capture.GetNextPacketSize()? > 0 {
                 let mut data = std::ptr::null_mut();
                 let mut frames = 0;
                 let mut flags = 0;
                 self.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None)?;
-                let byte_count = frames as usize * AUDIO_BYTES_PER_FRAME as usize;
                 let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0;
-                let written = if silent || data.is_null() {
-                    self.write_silence(writer, u64::from(frames))
+                if silent || data.is_null() {
+                    self.queue.push_silence(frames as usize);
                 } else {
-                    let bytes = std::slice::from_raw_parts(data, byte_count);
-                    self.write(writer, bytes, u64::from(frames))
-                };
+                    let byte_count = frames as usize * AUDIO_BYTES_PER_FRAME as usize;
+                    self.queue.push_bytes(std::slice::from_raw_parts(data, byte_count));
+                }
                 self.capture.ReleaseBuffer(frames)?;
-                written?;
             }
-        }
-        let expected = (timeline.as_secs_f64() * f64::from(AUDIO_RATE)) as u64;
-        let allowed_gap = u64::from(AUDIO_RATE) / 10;
-        if expected > self.frames_written + allowed_gap {
-            self.write_silence(writer, expected - self.frames_written)?;
         }
         Ok(())
     }
 
-    fn write_silence(&mut self, writer: &IMFSinkWriter, frames: u64) -> Result<()> {
-        let bytes = vec![0u8; frames as usize * AUDIO_BYTES_PER_FRAME as usize];
-        self.write(writer, &bytes, frames)
+    fn throw_away(&mut self) {
+        let _ = self.collect();
+        self.queue.samples.clear();
+    }
+}
+
+/// The sound of a recording as one unbroken stream that follows the timeline. Windows sends
+/// nothing from the speakers while no app makes a sound, so the mix fills the gaps with
+/// silence, which keeps sound and picture together.
+struct SoundMixer {
+    stream: u32,
+    sources: Vec<SoundSource>,
+    frames_written: u64,
+}
+
+impl SoundMixer {
+    /// Opens what was asked for. A source that cannot open, such as a missing or blocked
+    /// microphone, is left out and logged. Returns nothing when no source opens.
+    fn start(stream: u32, options: RecordOptions) -> Option<Self> {
+        let mut sources = Vec::new();
+        if options.system_sound {
+            match SoundSource::open(eRender, AUDCLNT_STREAMFLAGS_LOOPBACK) {
+                Ok(source) => sources.push(source),
+                Err(error) => crate::log::write(&format!("recording without system sound: {}", error.message())),
+            }
+        }
+        if options.microphone {
+            match SoundSource::open(eCapture, 0) {
+                Ok(source) => sources.push(source),
+                Err(error) => crate::log::write(&format!("recording without the microphone: {}", error.message())),
+            }
+        }
+        if sources.is_empty() {
+            return None;
+        }
+        Some(Self {
+            stream,
+            sources,
+            frames_written: 0,
+        })
     }
 
-    fn write(&mut self, writer: &IMFSinkWriter, bytes: &[u8], frames: u64) -> Result<()> {
+    /// Drops what arrived during a pause.
+    fn throw_away(&mut self) {
+        for source in &mut self.sources {
+            source.throw_away();
+        }
+    }
+
+    /// Writes the mix up to `timeline`, less `held_back`, which gives late sound time to arrive.
+    fn drain(&mut self, writer: &IMFSinkWriter, timeline: Duration, held_back: Duration) -> Result<()> {
+        for source in &mut self.sources {
+            source.collect()?;
+        }
+        let target = (timeline.saturating_sub(held_back).as_secs_f64() * f64::from(AUDIO_RATE)) as u64;
+        let frames = target.saturating_sub(self.frames_written);
+        if frames == 0 {
+            return Ok(());
+        }
+        let bytes = {
+            let mut queues: Vec<SampleQueue> = self.sources.iter_mut().map(|source| std::mem::take(&mut source.queue)).collect();
+            let bytes = mix(&mut queues, frames as usize);
+            for (source, mut queue) in self.sources.iter_mut().zip(queues) {
+                queue.drop_backlog(AUDIO_RATE as usize);
+                source.queue = queue;
+            }
+            bytes
+        };
         let rate = i64::from(AUDIO_RATE);
         let time = self.frames_written as i64 * TICKS_PER_SECOND / rate;
         let duration = frames as i64 * TICKS_PER_SECOND / rate;
-        let sample = bytes_sample(bytes, time, duration)?;
+        let sample = bytes_sample(&bytes, time, duration)?;
         unsafe { writer.WriteSample(self.stream, &sample)? };
         self.frames_written += frames;
         Ok(())
     }
 
     fn stop(&mut self) {
-        unsafe {
-            let _ = self.client.Stop();
+        for source in &self.sources {
+            unsafe {
+                let _ = source.client.Stop();
+            }
         }
     }
 }
@@ -708,7 +781,7 @@ mod tests {
             std::thread::sleep(Duration::from_secs(1));
             driver.stop.store(true, Ordering::SeqCst);
         });
-        let options = RecordOptions { frames_per_second: 30, system_sound: true };
+        let options = RecordOptions { frames_per_second: 30, system_sound: true, microphone: false };
         let recording = record(small_area(), options, &path, &controls).unwrap();
         let seconds = recording.duration.as_secs_f64();
         assert!((1.8..2.6).contains(&seconds), "recorded {seconds} s");
@@ -722,9 +795,44 @@ mod tests {
         let path = test_recording_path("countdown");
         let controls = Controls::default();
         controls.stop.store(true, Ordering::SeqCst);
-        let options = RecordOptions { frames_per_second: 30, system_sound: false };
+        let options = RecordOptions { frames_per_second: 30, system_sound: false, microphone: false };
         assert!(record(small_area(), options, &path, &controls).is_err());
         assert!(!path.exists());
+    }
+
+    fn queue_of(samples: &[i16]) -> SampleQueue {
+        SampleQueue {
+            samples: samples.iter().copied().collect(),
+        }
+    }
+
+    fn samples_of(bytes: &[u8]) -> Vec<i16> {
+        bytes.chunks_exact(2).map(|pair| i16::from_le_bytes([pair[0], pair[1]])).collect()
+    }
+
+    #[test]
+    fn sources_add_up_and_a_short_one_counts_as_silence() {
+        let mut queues = [queue_of(&[100, -100, 200, -200]), queue_of(&[1, 2])];
+        assert_eq!(samples_of(&mix(&mut queues, 2)), vec![101, -98, 200, -200]);
+    }
+
+    #[test]
+    fn loud_sound_clips_instead_of_wrapping() {
+        let mut queues = [queue_of(&[30_000, -30_000]), queue_of(&[30_000, -30_000])];
+        assert_eq!(samples_of(&mix(&mut queues, 1)), vec![32_767, -32_768]);
+    }
+
+    #[test]
+    fn silence_fills_the_timeline_when_no_source_has_sound() {
+        let mut queues = [SampleQueue::default()];
+        assert_eq!(samples_of(&mix(&mut queues, 2)), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_source_that_runs_ahead_loses_its_oldest_sound() {
+        let mut queue = queue_of(&[1, 2, 3, 4, 5, 6]);
+        queue.drop_backlog(1);
+        assert_eq!(queue.samples.iter().copied().collect::<Vec<_>>(), vec![5, 6]);
     }
 
     #[test]

@@ -1,5 +1,6 @@
-//! Reads the text in a snip with the OCR engine that ships with Windows, for the user's
-//! display languages. It runs in-process, so it takes no PowerShell start and no download.
+//! Reads a snip: a QR code when there is one, else its text with the OCR engine that ships
+//! with Windows, for the user's display languages. It runs in-process, so it takes no
+//! PowerShell start and no download.
 
 use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
 use windows::Media::Ocr::OcrEngine;
@@ -10,6 +11,35 @@ use crate::output::Image;
 
 /// Windows OCR misses small interface text at 100% scale; doubling it reads far better.
 const UPSCALE_BELOW_HEIGHT: u32 = 600;
+
+/// What a snip says.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Reading {
+    QrCode(String),
+    /// One line per text line. Empty when there is none.
+    Text(String),
+}
+
+/// Looks for a QR code first: OCR would only read noise from one.
+pub fn read(image: &Image) -> Result<Reading, String> {
+    match read_qr_code(image) {
+        Some(payload) => Ok(Reading::QrCode(payload)),
+        None => read_text(image).map(Reading::Text),
+    }
+}
+
+/// The payload of the first QR code that decodes.
+fn read_qr_code(image: &Image) -> Option<String> {
+    let width = image.width as usize;
+    let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(width, image.height as usize, |x, y| {
+        let pixel = &image.bgra[(y * width + x) * 4..][..3];
+        ((u32::from(pixel[0]) * 29 + u32::from(pixel[1]) * 150 + u32::from(pixel[2]) * 77) >> 8) as u8
+    });
+    prepared
+        .detect_grids()
+        .iter()
+        .find_map(|grid| grid.decode().ok().map(|(_, payload)| payload))
+}
 
 /// The text found in the image, one line per text line. Empty when there is none.
 /// Blocks for a moment, so the tray process calls it off its window thread.
@@ -53,16 +83,38 @@ fn doubled(image: &Image) -> Image {
     }
 }
 
-/// `oh-snap text FILE`: prints the text in a PNG.
+/// `oh-snap text FILE`: prints the QR code or the text in a PNG.
 pub fn command(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let image = crate::image_file::load_png(std::path::Path::new(path))?;
-    println!("{}", read_text(&image)?);
+    match read(&image)? {
+        Reading::QrCode(payload) | Reading::Text(payload) => println!("{payload}"),
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn qr_fixture() -> Image {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/testdata/qr.png");
+        crate::image_file::load_png(&path).unwrap()
+    }
+
+    #[test]
+    fn reads_a_qr_code() {
+        assert_eq!(read_qr_code(&qr_fixture()).as_deref(), Some("https://github.com/codepawl/oh-snap"));
+    }
+
+    #[test]
+    fn a_plain_image_has_no_qr_code() {
+        let image = Image {
+            width: 64,
+            height: 64,
+            bgra: vec![200; 64 * 64 * 4],
+        };
+        assert_eq!(read_qr_code(&image), None);
+    }
 
     #[test]
     fn doubling_repeats_each_pixel() {

@@ -59,6 +59,7 @@ enum Field {
     WinShiftR,
     RecordFrameRate,
     RecordSound,
+    RecordMicrophone,
     CopyToClipboard,
     SaveToFolder,
     Folder,
@@ -153,11 +154,12 @@ fn columns(settings: &Settings) -> [Vec<Section>; 2] {
             ],
         },
         Section {
-            icon: icons::PALETTE,
-            title: "Effects",
+            icon: icons::VIDEO,
+            title: "Recording",
             rows: vec![
-                row(Field::Particles, icons::SPARKLE, "Drag particles", particle_choice),
-                row(Field::ShutterSound, icons::SPEAKER, "Shutter sound", on_off(settings.shutter_sound)),
+                row(Field::RecordFrameRate, icons::TIMER, "Frame rate", frame_rate_choice),
+                row(Field::RecordSound, icons::SPEAKER, "System sound", on_off(settings.record_system_sound)),
+                row(Field::RecordMicrophone, icons::MICROPHONE, "Microphone", on_off(settings.record_microphone)),
             ],
         },
         Section {
@@ -185,11 +187,11 @@ fn columns(settings: &Settings) -> [Vec<Section>; 2] {
             ],
         },
         Section {
-            icon: icons::VIDEO,
-            title: "Recording",
+            icon: icons::PALETTE,
+            title: "Effects",
             rows: vec![
-                row(Field::RecordFrameRate, icons::TIMER, "Frame rate", frame_rate_choice),
-                row(Field::RecordSound, icons::SPEAKER, "System sound", on_off(settings.record_system_sound)),
+                row(Field::Particles, icons::SPARKLE, "Drag particles", particle_choice),
+                row(Field::ShutterSound, icons::SPEAKER, "Shutter sound", on_off(settings.shutter_sound)),
             ],
         },
         Section {
@@ -211,6 +213,14 @@ fn column_height(sections: &[Section]) -> f32 {
         .map(|section| SECTION_HEIGHT + section.rows.len() as f32 * ROW_HEIGHT)
         .sum::<f32>()
         + SECTION_GAP * (sections.len().saturating_sub(1)) as f32
+}
+
+/// The monitor's scale, or less when the window would not fit its work area, as on a
+/// 1080p laptop at 150%. Everything shrinks together, so no row is cut off.
+fn fitted_scale(monitor_scale: f32, window_size: (f32, f32), room: (f32, f32)) -> f32 {
+    let fit_width = room.0 / window_size.0;
+    let fit_height = room.1 / window_size.1;
+    monitor_scale.min(fit_width).min(fit_height)
 }
 
 fn window_height(settings: &Settings) -> f32 {
@@ -267,16 +277,6 @@ pub fn open(graphics: &Graphics, standalone: bool) -> Result<()> {
     };
     // Size and centre the window for the DPI of the monitor it opens on.
     let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
-    let scale = dpi as f32 / 96.0;
-    let mut frame = RECT {
-        left: 0,
-        top: 0,
-        right: (WIDTH * scale).round() as i32,
-        bottom: (window_height(&settings) * scale).round() as i32,
-    };
-    unsafe {
-        let _ = AdjustWindowRectExForDpi(&mut frame, style, false, WS_EX_LEFT, dpi);
-    }
     let mut cursor = Default::default();
     unsafe {
         let _ = GetCursorPos(&mut cursor);
@@ -290,6 +290,24 @@ pub fn open(graphics: &Graphics, standalone: bool) -> Result<()> {
         let _ = GetMonitorInfoW(monitor, &mut monitor_info);
     }
     let work = monitor_info.rcWork;
+    let mut borders = RECT::default();
+    unsafe {
+        let _ = AdjustWindowRectExForDpi(&mut borders, style, false, WS_EX_LEFT, dpi);
+    }
+    let room = (
+        (work.right - work.left - (borders.right - borders.left)) as f32,
+        (work.bottom - work.top - (borders.bottom - borders.top)) as f32,
+    );
+    let scale = fitted_scale(dpi as f32 / 96.0, (WIDTH, window_height(&settings)), room);
+    let mut frame = RECT {
+        left: 0,
+        top: 0,
+        right: (WIDTH * scale).round() as i32,
+        bottom: (window_height(&settings) * scale).round() as i32,
+    };
+    unsafe {
+        let _ = AdjustWindowRectExForDpi(&mut frame, style, false, WS_EX_LEFT, dpi);
+    }
     let width = frame.right - frame.left;
     let height = frame.bottom - frame.top;
     unsafe {
@@ -305,7 +323,7 @@ pub fn open(graphics: &Graphics, standalone: bool) -> Result<()> {
         );
     }
     dark_frame(hwnd, graphics);
-    let target = create_target(graphics, hwnd, dpi as f32)?;
+    let target = create_target(graphics, hwnd, scale * 96.0)?;
     let window = Box::new(SettingsWindow {
         graphics,
         hwnd,
@@ -496,6 +514,7 @@ impl SettingsWindow {
             Field::WinShiftR => settings.use_win_shift_r = on,
             Field::RecordFrameRate => settings.record_frames_per_second = RECORD_FRAME_RATES[hit.option],
             Field::RecordSound => settings.record_system_sound = on,
+            Field::RecordMicrophone => settings.record_microphone = on,
             Field::CopyToClipboard => settings.copy_to_clipboard = on,
             Field::SaveToFolder => settings.save_to_folder = on,
             Field::Folder if hit.option == 0 => {
@@ -716,5 +735,30 @@ fn check_for_updates() {
     }
     if let Ok(exe) = std::env::current_exe() {
         let _ = std::process::Command::new(exe).arg("update").spawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_window_keeps_the_monitor_scale_when_it_fits() {
+        assert_eq!(fitted_scale(1.0, (1160.0, 776.0), (1920.0, 1000.0)), 1.0);
+    }
+
+    #[test]
+    fn the_window_shrinks_to_fit_a_small_work_area() {
+        let scale = fitted_scale(1.5, (1160.0, 776.0), (1920.0, 1000.0));
+        assert!(scale < 1.5);
+        assert!(776.0 * scale <= 1000.0);
+    }
+
+    #[test]
+    fn both_columns_have_twelve_rows() {
+        let [left, right] = columns(&Settings::default());
+        let rows = |sections: &[Section]| sections.iter().map(|section| section.rows.len()).sum::<usize>();
+        assert_eq!(rows(&left), 12);
+        assert_eq!(rows(&right), 12);
     }
 }

@@ -57,6 +57,7 @@ pub struct Settings {
     // Recording
     pub record_frames_per_second: u32,
     pub record_system_sound: bool,
+    pub record_microphone: bool,
     // System
     pub start_at_sign_in: bool,
     pub updates: UpdateMode,
@@ -89,6 +90,7 @@ impl Default for Settings {
             use_win_shift_r: true,
             record_frames_per_second: 30,
             record_system_sound: true,
+            record_microphone: false,
             start_at_sign_in: true,
             updates: UpdateMode::Auto,
         }
@@ -185,6 +187,7 @@ fn apply(settings: &mut Settings, key: &str, value: &str) {
                 "use_win_shift_s" => settings.use_win_shift_s = enabled,
                 "use_win_shift_r" => settings.use_win_shift_r = enabled,
                 "record_system_sound" => settings.record_system_sound = enabled,
+                "record_microphone" => settings.record_microphone = enabled,
                 "start_at_sign_in" => settings.start_at_sign_in = enabled,
                 _ => {}
             }
@@ -249,6 +252,7 @@ pub fn save(settings: &Settings) {
         format!("use_win_shift_r = {}", settings.use_win_shift_r),
         format!("record_frames_per_second = {}", settings.record_frames_per_second),
         format!("record_system_sound = {}", settings.record_system_sound),
+        format!("record_microphone = {}", settings.record_microphone),
         "# System".to_string(),
         format!("start_at_sign_in = {}", settings.start_at_sign_in),
         format!("updates = \"{updates}\""),
@@ -288,6 +292,7 @@ mod tests {
             use_win_shift_r: false,
             record_frames_per_second: 60,
             record_system_sound: false,
+            record_microphone: true,
             start_at_sign_in: false,
             updates: UpdateMode::Notify,
         };

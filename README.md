@@ -55,7 +55,7 @@ Open the settings from the tray menu or with `oh-snap settings`. A change saves 
 | Effects | Drag particles: while dragging, at the start and end of the drag, or off. Shutter sound |
 | Shortcuts | PrtSc, Win+Shift+S, Win+Shift+R |
 | After capture | Copy to clipboard, save to folder, folder, PNG or JPG, result card and how long it stays, open the editor |
-| Recording | Frame rate of 30 or 60, system sound |
+| Recording | Frame rate of 30 or 60, system sound, microphone |
 | System | Start at sign-in, updates: install on their own, only tell you, or off. `check now` looks at once |
 
 The settings live in `%APPDATA%\oh-snap\settings.toml`.
@@ -130,15 +130,15 @@ oh-snap preview DIR          draw the overlay, the card and the editor into PNG 
 oh-snap logo DIR             write the logo as SVG, PNG and ICO
 oh-snap settings             open the settings
 oh-snap update               install the latest release from GitHub
-oh-snap text FILE            print the text in a PNG
-oh-snap record --rect X,Y,W,H [--seconds N] [--fps N] [--no-sound] [--out FILE]
+oh-snap text FILE            print the QR code or the text in a PNG
+oh-snap record --rect X,Y,W,H [--seconds N] [--fps N] [--no-sound] [--microphone] [--out FILE]
 oh-snap gif FILE             make a GIF from a recording
 oh-snap quit                 stop the tray process
 ```
 
-Press Win+Shift+R, or `V` on the overlay, to record video. Pick an area, a window or a screen. After a 3 second countdown, a small bar shows the time with pause and stop, and a thin frame marks the area. Windows keeps both out of the video. Press Win+Shift+R again or click the tray icon to stop. The MP4 goes to `Videos\Screen Recordings`, with the pointer and the sound that your computer plays. The card can open the file, show it in Explorer, or make a GIF next to it. You can drag the card's image into another app.
+Press Win+Shift+R, or `V` on the overlay, to record video. Pick an area, a window or a screen. After a 3 second countdown, a small bar shows the time with pause and stop, and a thin frame marks the area. Windows keeps both out of the video. Press Win+Shift+R again or click the tray icon to stop. The MP4 goes to `Videos\Screen Recordings`, with the pointer and the sound that your computer plays. Turn on `Microphone` in the settings to add your voice. The card can open the file, show it in Explorer, or make a GIF next to it. You can drag the card's image into another app.
 
-Press `T` on the overlay to read text instead of keeping an image. Pick an area, a window or a screen, and the text goes to the clipboard. It uses the OCR engine in Windows, so it needs no download and takes about 100 ms.
+Press `T` on the overlay to read text instead of keeping an image. Pick an area, a window or a screen, and the text goes to the clipboard. A QR code goes to the clipboard the same way, and when it holds a web link, a click on the card opens it. It uses the OCR engine in Windows, so it needs no download and takes about 100 ms.
 
 Press `C` on the overlay to copy the colour under the pointer as a hex value. The card also shows it as RGB and HSL.
 
@@ -185,7 +185,7 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 ## Next
 
 - Add-ons that run after every snip, not only from the editor.
-- Microphone sound and trimming for recordings, QR codes.
+- Trimming for recordings, drawing on the overlay.
 - macOS and Linux versions, which are coming.
 
 ## License

@@ -52,10 +52,10 @@ usage
                   [--no-clipboard] [--no-save]
   oh-snap install                  run at sign-in, take PrtSc, Win+Shift+S and ms-screenclip:
   oh-snap uninstall                give them back to Snipping Tool
-  oh-snap record --rect X,Y,W,H [--seconds N] [--fps N] [--no-sound] [--out FILE]
+  oh-snap record --rect X,Y,W,H [--seconds N] [--fps N] [--no-sound] [--microphone] [--out FILE]
                                    record an area without any window
   oh-snap gif FILE                 make a GIF from a recording
-  oh-snap text FILE                print the text in a PNG
+  oh-snap text FILE                print the QR code or the text in a PNG
   oh-snap update                   install the latest release from GitHub
   oh-snap bench [ROUNDS]           measure capture and overlay speed
   oh-snap quit                     stop the tray process
@@ -154,7 +154,7 @@ fn dispatch(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 fn record_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut area = None;
     let mut seconds = 10;
-    let mut options = recorder::RecordOptions { frames_per_second: 30, system_sound: true };
+    let mut options = recorder::RecordOptions { frames_per_second: 30, system_sound: true, microphone: false };
     let mut out = None;
     let mut index = 0;
     while index < arguments.len() {
@@ -162,6 +162,10 @@ fn record_command(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
         index += 1;
         if argument == "--no-sound" {
             options.system_sound = false;
+            continue;
+        }
+        if argument == "--microphone" {
+            options.microphone = true;
             continue;
         }
         let value = arguments.get(index).ok_or_else(|| format!("{argument} needs a value"))?;
