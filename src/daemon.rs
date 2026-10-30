@@ -35,7 +35,7 @@ use crate::card::CardMessage;
 use crate::confirm::Choice;
 use crate::settings::{Settings, UpdateMode};
 use crate::updater::Check;
-use crate::snip::{self, SnipRequest};
+use crate::snip::{self, Picked, SnipRequest};
 use crate::capture::PixelRect;
 
 const DAEMON_CLASS: PCWSTR = w!("oh-snap.daemon");
@@ -43,6 +43,7 @@ const MESSAGE_TRIGGER: u32 = WM_APP + 1;
 const MESSAGE_TRAY: u32 = WM_APP + 2;
 const MESSAGE_UPDATE_CHECKED: u32 = WM_APP + 3;
 const MESSAGE_UPDATE_DOWNLOADED: u32 = WM_APP + 4;
+const MESSAGE_TEXT_READ: u32 = WM_APP + 5;
 const COPYDATA_COMMAND: usize = 0x6F68_736E;
 /// The process hands its memory back to Windows this long after the last snip, setting or
 /// update. Back-to-back snips stay at full speed; the first one after a quiet spell pays
@@ -217,7 +218,7 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
         return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
     }
     let daemon = unsafe { &mut *daemon_pointer };
-    if matches!(message, MESSAGE_TRIGGER | MESSAGE_TRAY | MESSAGE_UPDATE_CHECKED | MESSAGE_UPDATE_DOWNLOADED | WM_COPYDATA) {
+    if matches!(message, MESSAGE_TRIGGER | MESSAGE_TRAY | MESSAGE_UPDATE_CHECKED | MESSAGE_UPDATE_DOWNLOADED | MESSAGE_TEXT_READ | WM_COPYDATA) {
         schedule_trim(hwnd);
     }
     match message {
@@ -243,6 +244,11 @@ unsafe extern "system" fn daemon_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
                 let mode = mode_from_number(wparam.0).unwrap_or(daemon.settings.default_mode);
                 daemon.snip(hwnd, mode, None);
             }
+            LRESULT(0)
+        }
+        MESSAGE_TEXT_READ => {
+            let result = unsafe { Box::from_raw(lparam.0 as *mut std::result::Result<String, String>) };
+            daemon.on_text_read(hwnd, *result);
             LRESULT(0)
         }
         MESSAGE_UPDATE_CHECKED => {
@@ -402,8 +408,21 @@ impl Daemon {
                     capturer.capture()?;
                     area
                 }
-                None => match snip::pick(capturer, &self.graphics, &request)? {
-                    Some(area) => area,
+                None => match snip::pick(capturer, &self.graphics, &request, true)? {
+                    Some(Picked::Area(area)) => area,
+                    Some(Picked::Text(area)) => {
+                        start_reading_text(hwnd, snip::crop(capturer, area)?);
+                        return Ok(());
+                    }
+                    Some(Picked::Color(rgb)) => {
+                        let copied = crate::output::copy_text_to_clipboard(Some(hwnd), &crate::output::color_hex(rgb));
+                        let message = match copied {
+                            Ok(()) => CardMessage::Color(rgb),
+                            Err(error) => CardMessage::Failed(error.message()),
+                        };
+                        let _ = crate::card::show(&self.graphics, None, message, cursor_area());
+                        return Ok(());
+                    }
                     None => return Ok(()),
                 },
             };
@@ -484,6 +503,25 @@ impl Daemon {
         }
     }
 
+    /// Text from the overlay's text tool: on the clipboard, with a card that says so.
+    fn on_text_read(&mut self, hwnd: HWND, result: std::result::Result<String, String>) {
+        let message = match result {
+            Ok(text) if text.trim().is_empty() => CardMessage::Notice {
+                title: "no text found".into(),
+                detail: "the clipboard stays as it was".into(),
+            },
+            Ok(text) => match crate::output::copy_text_to_clipboard(Some(hwnd), &text) {
+                Ok(()) => text_card(&text),
+                Err(error) => CardMessage::Failed(error.message()),
+            },
+            Err(error) => {
+                crate::log::write(&format!("reading text failed: {error}"));
+                CardMessage::Failed(error)
+            }
+        };
+        let _ = crate::card::show(&self.graphics, None, message, cursor_area());
+    }
+
     fn show_menu(&mut self, hwnd: HWND) {
         let recent: Vec<std::path::PathBuf> = crate::history::list().into_iter().take(crate::history::LISTED).collect();
         let Ok(menu) = (unsafe { CreatePopupMenu() }) else {
@@ -537,6 +575,26 @@ impl Daemon {
                 _ => {}
             }
         }
+    }
+}
+
+/// Reads off the window thread, so the tray stays responsive; the answer comes back as a message.
+fn start_reading_text(hwnd: HWND, image: crate::output::Image) {
+    let window = hwnd.0 as isize;
+    std::thread::spawn(move || {
+        let result = Box::new(crate::ocr::read_text(&image));
+        unsafe {
+            let _ = PostMessageW(Some(HWND(window as *mut _)), MESSAGE_TEXT_READ, WPARAM(0), LPARAM(Box::into_raw(result) as isize));
+        }
+    });
+}
+
+fn text_card(text: &str) -> CardMessage {
+    let line_count = text.lines().count();
+    let title = if line_count == 1 { "text copied".to_string() } else { format!("text copied · {line_count} lines") };
+    CardMessage::Notice {
+        title,
+        detail: text.lines().next().unwrap_or_default().to_string(),
     }
 }
 

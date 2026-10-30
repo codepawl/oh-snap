@@ -74,10 +74,26 @@ impl Mode {
     }
 }
 
-const TOOLBAR_ITEMS: [(Mode, &str, &str); 3] = [
-    (Mode::Region, "r", "region"),
-    (Mode::Window, "w", "window"),
-    (Mode::Screen, "s", "screen"),
+/// What the overlay does with the pick. Text works with every mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    Snip,
+    Text,
+    Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolbarItem {
+    Mode(Mode),
+    Tool(Tool),
+}
+
+const TOOLBAR_ITEMS: [(ToolbarItem, &str, &str); 5] = [
+    (ToolbarItem::Mode(Mode::Region), "r", "region"),
+    (ToolbarItem::Mode(Mode::Window), "w", "window"),
+    (ToolbarItem::Mode(Mode::Screen), "s", "screen"),
+    (ToolbarItem::Tool(Tool::Text), "t", "text"),
+    (ToolbarItem::Tool(Tool::Color), "c", "color"),
 ];
 
 /// Device-independent factories, created once and reused by every overlay.
@@ -204,11 +220,16 @@ pub struct OverlayOptions {
     pub show_loupe: bool,
     pub show_crosshair: bool,
     pub snap_to_windows: bool,
+    /// Offers text and colour; the tray process handles those, the plain CLI does not.
+    pub extra_tools: bool,
 }
 
 pub struct OverlayOutcome {
     pub selection: Option<PixelRect>,
     pub first_frame_at: Option<Instant>,
+    pub tool: Tool,
+    /// The pixel the colour tool picked, as red, green, blue.
+    pub color: Option<[u8; 3]>,
 }
 
 struct Brushes {
@@ -231,7 +252,10 @@ struct OverlayState {
     cursor: (i32, i32),
     press_point: Option<(i32, i32)>,
     dragging: bool,
-    toolbar_hits: Vec<(Mode, D2D_RECT_F)>,
+    toolbar_hits: Vec<(ToolbarItem, D2D_RECT_F)>,
+    tool: Tool,
+    picked_color: Option<[u8; 3]>,
+    extra_tools: bool,
     /// The toolbar's close button, which leaves without a snip like Esc.
     close_hit: Option<D2D_RECT_F>,
     target: ID2D1RenderTarget,
@@ -298,6 +322,7 @@ pub fn select_area(graphics: &Graphics, screenshot: &Screenshot, options: Overla
     state.show_loupe = options.show_loupe;
     state.show_crosshair = options.show_crosshair;
     state.snap_to_windows = options.snap_to_windows;
+    state.extra_tools = options.extra_tools;
     if options.particles != ParticleMode::Off {
         state.particles = Some(ParticleSystem::new(cursor.0 as u32 ^ (cursor.1 as u32).rotate_left(16)));
     }
@@ -333,6 +358,8 @@ pub fn select_area(graphics: &Graphics, screenshot: &Screenshot, options: Overla
     Ok(OverlayOutcome {
         selection: state.selection,
         first_frame_at: state.first_frame_at,
+        tool: state.tool,
+        color: state.picked_color,
     })
 }
 
@@ -546,7 +573,7 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, message: u32, wparam: WPARAM,
             state.cursor = state.to_screen(lparam);
             if let Some(press_point) = state.press_point {
                 let moved = (state.cursor.0 - press_point.0).abs() + (state.cursor.1 - press_point.1).abs();
-                if state.mode == Mode::Region && moved > 3 && !state.dragging {
+                if state.mode == Mode::Region && state.tool != Tool::Color && moved > 3 && !state.dragging {
                     state.dragging = true;
                     if state.particle_mode == ParticleMode::StartAndEnd {
                         state.burst_particles(hwnd, press_point);
@@ -581,8 +608,11 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, message: u32, wparam: WPARAM,
                 state.done = true;
                 return LRESULT(0);
             }
-            if let Some(mode) = state.toolbar_item_at(state.cursor) {
-                state.mode = mode;
+            if let Some(item) = state.toolbar_item_at(state.cursor) {
+                match item {
+                    ToolbarItem::Mode(mode) => state.mode = mode,
+                    ToolbarItem::Tool(tool) => state.toggle_tool(tool),
+                }
                 state.paint();
                 return LRESULT(0);
             }
@@ -634,6 +664,9 @@ impl OverlayState {
             press_point: None,
             dragging: false,
             toolbar_hits: Vec::new(),
+            tool: Tool::Snip,
+            picked_color: None,
+            extra_tools: true,
             close_hit: None,
             target,
             bitmap,
@@ -719,6 +752,9 @@ impl OverlayState {
 
     /// What a click would pick right now, or the live drag rectangle.
     fn highlighted(&self) -> Option<PixelRect> {
+        if self.tool == Tool::Color {
+            return None;
+        }
         if self.dragging {
             let start = self.press_point?;
             let rect = PixelRect::from_edges(start.0, start.1, self.cursor.0, self.cursor.1);
@@ -736,6 +772,11 @@ impl OverlayState {
     }
 
     fn finish_press(&mut self, hwnd: HWND) {
+        if self.tool == Tool::Color {
+            self.press_point = None;
+            self.pick_color();
+            return;
+        }
         let picked = self.highlighted();
         let was_dragging = self.dragging;
         self.press_point = None;
@@ -756,12 +797,24 @@ impl OverlayState {
         self.paint();
     }
 
+    /// Takes the pixel under the pointer and closes the overlay.
+    fn pick_color(&mut self) {
+        self.tool = Tool::Color;
+        self.picked_color = self.screenshot().pixel_at(self.cursor.0, self.cursor.1);
+        self.done = true;
+    }
+
+    fn toggle_tool(&mut self, tool: Tool) {
+        self.tool = if self.tool == tool { Tool::Snip } else { tool };
+    }
+
     fn on_key(&mut self, key: u16) {
         let shift_state = unsafe { GetKeyState(VK_SHIFT.0 as i32) };
         let fast = shift_state < 0;
         let step = if fast { 10 } else { 1 };
         match key {
             key if key == VK_ESCAPE.0 => self.done = true,
+            key if key == VK_RETURN.0 && self.tool == Tool::Color => self.pick_color(),
             key if key == VK_RETURN.0 => {
                 self.selection = self.highlighted().or(Some(self.current_monitor()));
                 self.done = true;
@@ -769,6 +822,12 @@ impl OverlayState {
             key if key == u16::from(b'R') => self.set_mode(Mode::Region),
             key if key == u16::from(b'W') => self.set_mode(Mode::Window),
             key if key == u16::from(b'S') => self.set_mode(Mode::Screen),
+            key if key == u16::from(b'T') && self.extra_tools => {
+                self.toggle_tool(Tool::Text);
+                self.paint();
+            }
+            // The hand is already on the mouse, over the pixel: C takes it right away.
+            key if key == u16::from(b'C') && self.extra_tools => self.pick_color(),
             key if key == VK_LEFT.0 => self.nudge(-step, 0),
             key if key == VK_RIGHT.0 => self.nudge(step, 0),
             key if key == VK_UP.0 => self.nudge(0, -step),
@@ -797,7 +856,7 @@ impl OverlayState {
             .is_some_and(|rect| x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom)
     }
 
-    fn toolbar_item_at(&self, point: (i32, i32)) -> Option<Mode> {
+    fn toolbar_item_at(&self, point: (i32, i32)) -> Option<ToolbarItem> {
         if self.dragging {
             return None;
         }
@@ -805,7 +864,7 @@ impl OverlayState {
         self.toolbar_hits
             .iter()
             .find(|(_, rect)| x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom)
-            .map(|(mode, _)| *mode)
+            .map(|(item, _)| *item)
     }
 
     fn paint(&mut self) {
@@ -827,7 +886,8 @@ impl OverlayState {
             self.draw_frame(rect);
             self.draw_size_label(rect);
         }
-        if self.show_crosshair && self.mode == Mode::Region && !self.dragging {
+        let wants_crosshair = self.mode == Mode::Region || self.tool == Tool::Color;
+        if self.show_crosshair && wants_crosshair && !self.dragging {
             self.draw_crosshair();
         }
         if self.dragging {
@@ -839,7 +899,7 @@ impl OverlayState {
         if let Some(particles) = &self.particles {
             particles.draw(&self.target, &self.particle_brush, &self.graphics().label_format);
         }
-        if self.show_loupe {
+        if self.show_loupe || self.tool == Tool::Color {
             self.draw_loupe();
         }
         unsafe {
@@ -949,9 +1009,10 @@ impl OverlayState {
         let padding_y = 6.0;
         let gap = 2.0;
         let inset = 4.0;
-        let labels: Vec<(Mode, String, String)> = TOOLBAR_ITEMS
+        let labels: Vec<(ToolbarItem, String, String)> = TOOLBAR_ITEMS
             .iter()
-            .map(|(mode, key, name)| (*mode, format!("[{key}]"), format!(" {name}")))
+            .filter(|(item, _, _)| self.extra_tools || matches!(item, ToolbarItem::Mode(_)))
+            .map(|(item, key, name)| (*item, format!("[{key}]"), format!(" {name}")))
             .collect();
         let sizes: Vec<(f32, f32, f32)> = labels
             .iter()
@@ -968,9 +1029,10 @@ impl OverlayState {
         let (close_key_width, _) = self.graphics().measure("[esc]");
         let (close_name_width, _) = self.graphics().measure(" close");
         let close_width = close_key_width + close_name_width + padding_x * 2.0 + ICON_SLOT;
-        // A wider gap sets close apart from the three modes.
+        // Wider gaps set the tools apart from the modes, and close apart from both.
         let close_gap = 10.0;
-        let total_width = spark_slot + buttons_width + close_gap + close_width + inset * 2.0;
+        let tools_gap = if self.extra_tools { close_gap - gap } else { 0.0 };
+        let total_width = spark_slot + buttons_width + tools_gap + close_gap + close_width + inset * 2.0;
         let bar_left = ((monitor.left + monitor.right - total_width) / 2.0).round();
         let bar_top = monitor.top + 16.0;
         let bar = D2D_RECT_F {
@@ -991,17 +1053,23 @@ impl OverlayState {
         let hovered = self.toolbar_item_at(self.cursor);
         let mut hits = Vec::new();
         let mut button_left = bar.left + inset + spark_slot;
-        for ((mode, key, name), (key_width, name_width, _)) in labels.iter().zip(sizes.iter()) {
+        for ((item, key, name), (key_width, name_width, _)) in labels.iter().zip(sizes.iter()) {
+            if *item == ToolbarItem::Tool(Tool::Text) {
+                button_left += tools_gap;
+            }
             let button = D2D_RECT_F {
                 left: button_left,
                 top: bar.top + inset,
                 right: button_left + key_width + name_width + padding_x * 2.0 + ICON_SLOT,
                 bottom: bar.top + inset + button_height,
             };
-            let active = *mode == self.mode;
+            let active = match item {
+                ToolbarItem::Mode(mode) => *mode == self.mode && self.tool != Tool::Color,
+                ToolbarItem::Tool(tool) => *tool == self.tool,
+            };
             if active {
                 self.rounded(button, style::BUTTON_RADIUS, &self.brushes.accent_soft, None);
-            } else if hovered == Some(*mode) {
+            } else if hovered == Some(*item) {
                 self.rounded(button, style::BUTTON_RADIUS, &self.brushes.hover, None);
             }
             let (key_brush, name_brush) = if active {
@@ -1010,10 +1078,15 @@ impl OverlayState {
                 (&self.brushes.text_dim, &self.brushes.text)
             };
             let icon_area = D2D_RECT_F { left: button.left + padding_x - 2.0, top: button.top, right: button.left + padding_x + ICON_SLOT - 6.0, bottom: button.bottom };
-            self.graphics().draw_icon(&self.target, mode_icon(*mode), icon_area, name_brush);
+            let icon = match item {
+                ToolbarItem::Mode(mode) => mode_icon(*mode),
+                ToolbarItem::Tool(Tool::Text) => crate::icons::TEXT,
+                ToolbarItem::Tool(_) => crate::icons::PALETTE,
+            };
+            self.graphics().draw_icon(&self.target, icon, icon_area, name_brush);
             self.text(key, button.left + padding_x + ICON_SLOT, button.top + padding_y, key_brush);
             self.text(name, button.left + padding_x + ICON_SLOT + key_width, button.top + padding_y, name_brush);
-            hits.push((*mode, button));
+            hits.push((*item, button));
             button_left = button.right + gap;
         }
         self.toolbar_hits = hits;

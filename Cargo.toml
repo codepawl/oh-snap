@@ -1,6 +1,6 @@
 [package]
 name = "oh-snap"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "A fast screen snipping tool for Windows"
 license = "MIT"
@@ -14,7 +14,13 @@ windows-numerics = "0.3"
 [dependencies.windows]
 version = "0.62"
 features = [
+    "Foundation_Collections",
     "Foundation_Numerics",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Security_Cryptography",
+    "Storage_Streams",
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",

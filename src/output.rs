@@ -143,6 +143,41 @@ unsafe fn fill_clipboard(dib: &[u8], png_bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// "#D97757" for a pixel's red, green and blue.
+pub fn color_hex(rgb: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
+}
+
+/// "rgb(217, 119, 87)  hsl(15, 63%, 60%)" for the card.
+pub fn color_details(rgb: [u8; 3]) -> String {
+    let (hue, saturation, lightness) = hsl(rgb);
+    format!("rgb({}, {}, {})  hsl({hue}, {saturation}%, {lightness}%)", rgb[0], rgb[1], rgb[2])
+}
+
+/// Hue in degrees, saturation and lightness in percent, rounded.
+fn hsl(rgb: [u8; 3]) -> (u32, u32, u32) {
+    let red = f32::from(rgb[0]) / 255.0;
+    let green = f32::from(rgb[1]) / 255.0;
+    let blue = f32::from(rgb[2]) / 255.0;
+    let largest = red.max(green).max(blue);
+    let smallest = red.min(green).min(blue);
+    let range = largest - smallest;
+    let lightness = (largest + smallest) / 2.0;
+    if range == 0.0 {
+        return (0, 0, (lightness * 100.0).round() as u32);
+    }
+    let saturation = range / (1.0 - (2.0 * lightness - 1.0).abs());
+    let sector = if largest == red {
+        ((green - blue) / range).rem_euclid(6.0)
+    } else if largest == green {
+        (blue - red) / range + 2.0
+    } else {
+        (red - green) / range + 4.0
+    };
+    let hue = (sector * 60.0).round() as u32 % 360;
+    (hue, (saturation * 100.0).round() as u32, (lightness * 100.0).round() as u32)
+}
+
 /// Puts plain text on the clipboard, for add-ons such as OCR.
 pub fn copy_text_to_clipboard(owner: Option<HWND>, text: &str) -> Result<()> {
     let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
@@ -208,4 +243,18 @@ fn build_dib(image: &Image) -> Vec<u8> {
         dib.extend_from_slice(row);
     }
     dib
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn colors_read_as_hex_and_hsl() {
+        assert_eq!(color_hex([0xD9, 0x77, 0x57]), "#D97757");
+        assert_eq!(hsl([0xD9, 0x77, 0x57]), (15, 63, 60));
+        assert_eq!(hsl([255, 255, 255]), (0, 0, 100));
+        assert_eq!(hsl([0, 0, 255]), (240, 100, 50));
+        assert_eq!(hsl([255, 0, 128]), (330, 100, 50));
+    }
 }

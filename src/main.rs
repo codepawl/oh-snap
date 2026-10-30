@@ -16,6 +16,7 @@ mod image_menu;
 mod install;
 mod log;
 mod logo;
+mod ocr;
 mod output;
 mod particles;
 mod pin;
@@ -48,6 +49,7 @@ usage
                   [--no-clipboard] [--no-save]
   oh-snap install                  run at sign-in, take PrtSc, Win+Shift+S and ms-screenclip:
   oh-snap uninstall                give them back to Snipping Tool
+  oh-snap text FILE                print the text in a PNG
   oh-snap update                   install the latest release from GitHub
   oh-snap bench [ROUNDS]           measure capture and overlay speed
   oh-snap quit                     stop the tray process
@@ -74,6 +76,7 @@ fn dispatch(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         None => Ok(daemon::run(false)?),
         Some("daemon") => Ok(daemon::run(arguments.get(1).map(String::as_str) == Some("--after-update"))?),
         Some("update") => updater::command(),
+        Some("text") => ocr::command(arguments.get(1).ok_or("usage: oh-snap text FILE")?),
         Some("capture") => capture_command(&arguments[1..]),
         Some("install") => install::install(),
         Some("edit") => {

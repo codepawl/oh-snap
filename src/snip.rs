@@ -7,7 +7,7 @@ use windows::Win32::Foundation::HWND;
 
 use crate::capture::{Capturer, PixelRect};
 use crate::output::{self, Image};
-use crate::overlay::{self, Graphics, Mode, OverlayOptions};
+use crate::overlay::{self, Graphics, Mode, OverlayOptions, Tool};
 use crate::settings::{FileFormat, ParticleMode, Settings};
 use crate::sound;
 
@@ -27,10 +27,24 @@ pub struct SnipOutcome {
     pub history: Option<PathBuf>,
 }
 
+/// What the user picked on the overlay.
+pub enum Picked {
+    Area(PixelRect),
+    /// Read the text in this area instead of keeping the image.
+    Text(PixelRect),
+    /// A pixel's red, green and blue.
+    Color([u8; 3]),
+}
+
 pub type SnipResult = Result<Option<SnipOutcome>, Box<dyn std::error::Error>>;
 
 /// Captures the screen and shows the overlay; returns the picked area, or None on cancel.
-pub fn pick(capturer: &mut Capturer, graphics: &Graphics, request: &SnipRequest) -> Result<Option<PixelRect>, Box<dyn std::error::Error>> {
+pub fn pick(
+    capturer: &mut Capturer,
+    graphics: &Graphics,
+    request: &SnipRequest,
+    extra_tools: bool,
+) -> Result<Option<Picked>, Box<dyn std::error::Error>> {
     let screenshot = capturer.capture()?;
     let options = OverlayOptions {
         start_mode: request.mode,
@@ -39,16 +53,25 @@ pub fn pick(capturer: &mut Capturer, graphics: &Graphics, request: &SnipRequest)
         show_loupe: request.settings.show_loupe,
         show_crosshair: request.settings.show_crosshair,
         snap_to_windows: request.settings.snap_to_windows,
+        extra_tools,
     };
-    Ok(overlay::select_area(graphics, screenshot, options)?.selection)
+    let outcome = overlay::select_area(graphics, screenshot, options)?;
+    if let Some(color) = outcome.color {
+        return Ok(Some(Picked::Color(color)));
+    }
+    Ok(outcome.selection.map(|area| match outcome.tool {
+        Tool::Text => Picked::Text(area),
+        Tool::Snip | Tool::Color => Picked::Area(area),
+    }))
 }
 
 /// Pick and deliver in one go, for the CLI; the tray process adds the confirm step.
 pub fn run(capturer: &mut Capturer, graphics: &Graphics, owner: Option<HWND>, request: &SnipRequest) -> SnipResult {
-    let Some(area) = pick(capturer, graphics, request)? else {
-        return Ok(None);
-    };
-    deliver(capturer, owner, request, area).map(Some)
+    match pick(capturer, graphics, request, false)? {
+        Some(Picked::Area(area)) => deliver(capturer, owner, request, area).map(Some),
+        // The toolbar here offers neither text nor colour.
+        Some(Picked::Text(_) | Picked::Color(_)) | None => Ok(None),
+    }
 }
 
 /// Captures a known area without any UI (the CLI's `--rect`), quietly.

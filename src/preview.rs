@@ -81,7 +81,7 @@ pub fn run(folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", path.display());
     }
     let failed = CardMessage::Failed("the selected area is off screen".into());
-    for (name, image, message) in [("card-saved", Some(&snipped), saved), ("card-failed", None, failed)] {
+    for (name, image, message) in [("card-saved", Some(&snipped), saved), ("card-failed", None, failed), ("card-color", None, CardMessage::Color([0xD9, 0x77, 0x57]))] {
         let (pixels, width, height) = card::render_offscreen(&graphics, image, message)?;
         let card_image = Image { width, height, bgra: pixels };
         let path = folder.join(format!("{name}.png"));

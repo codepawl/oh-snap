@@ -68,6 +68,8 @@ pub enum CardMessage {
     Saved { copied: bool, path: Option<PathBuf>, history: Option<PathBuf> },
     /// A snip from the tray's recent list, put back on the clipboard.
     Recent { path: PathBuf },
+    /// A colour from the overlay's colour tool, with its hex value on the clipboard.
+    Color([u8; 3]),
     Failed(String),
     /// The delay timer: seconds left before the capture.
     Countdown(u32),
@@ -430,7 +432,7 @@ impl CardState {
         match &self.message {
             CardMessage::Saved { path, .. } => path.as_deref(),
             CardMessage::Recent { path } => Some(path),
-            CardMessage::Failed(_) | CardMessage::Countdown(_) | CardMessage::Notice { .. } => None,
+            CardMessage::Failed(_) | CardMessage::Countdown(_) | CardMessage::Notice { .. } | CardMessage::Color(_) => None,
         }
     }
 
@@ -623,6 +625,22 @@ impl CardState {
                 draw_mark(&target, Mark::Cross, PADDING, line_top, mark_brush);
                 self.text(&target, "snip failed", PADDING + 16.0, line_top, &text);
                 self.text(&target, reason, PADDING + 16.0, line_top + LINE_HEIGHT, &dim);
+            }
+            CardMessage::Color(rgb) => {
+                let swatch = D2D1_ROUNDED_RECT {
+                    rect: D2D_RECT_F { left: PADDING, top: line_top + 2.0, right: PADDING + 12.0, bottom: line_top + 14.0 },
+                    radiusX: 3.0,
+                    radiusY: 3.0,
+                };
+                if let Ok(fill) = brush(style::rgb(rgb[0], rgb[1], rgb[2], 1.0)) {
+                    unsafe {
+                        target.FillRoundedRectangle(&swatch, &fill);
+                        target.DrawRoundedRectangle(&swatch, &rule, 1.0, None);
+                    }
+                }
+                let title = format!("{} copied", crate::output::color_hex(*rgb));
+                self.text(&target, &title, PADDING + 18.0, line_top, &text);
+                self.text(&target, &crate::output::color_details(*rgb), PADDING + 18.0, line_top + LINE_HEIGHT, &dim);
             }
             CardMessage::Notice { title, detail } => {
                 let spark = D2D_RECT_F { left: PADDING - 6.0, top: line_top - 4.0, right: PADDING + 14.0, bottom: line_top + LINE_HEIGHT + 2.0 };

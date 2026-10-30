@@ -129,8 +129,13 @@ oh-snap preview DIR          draw the overlay, the card and the editor into PNG 
 oh-snap logo DIR             write the logo as SVG, PNG and ICO
 oh-snap settings             open the settings
 oh-snap update               install the latest release from GitHub
+oh-snap text FILE            print the text in a PNG
 oh-snap quit                 stop the tray process
 ```
+
+Press `T` on the overlay to read text instead of keeping an image. Pick an area, a window or a screen, and the text goes to the clipboard. It uses the OCR engine in Windows, so it needs no download and takes about 100 ms.
+
+Press `C` on the overlay to copy the colour under the pointer as a hex value. The card also shows it as RGB and HSL.
 
 Press Shift+PrtSc to snip the last area again without the overlay, for before and after shots.
 
@@ -174,7 +179,7 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 ## Next
 
 - Add-ons that run after every snip, not only from the editor.
-- Screen recording with GIF export, text and colour picking on the overlay, QR codes.
+- Screen recording with GIF export, QR codes.
 - macOS and Linux versions, which are coming.
 
 ## License
