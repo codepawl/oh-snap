@@ -39,6 +39,7 @@ pub fn run(folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
             drag_from,
             window_rects: windows.clone(),
             trail,
+            finishing: false,
         };
         let pixels = overlay::render_offscreen(&graphics, &screenshot, scene)?;
         let image = Image {
@@ -50,6 +51,24 @@ pub fn run(folder: &Path) -> Result<(), Box<dyn std::error::Error>> {
         output::write_png_to(&output::encode_png(&image)?, &path)?;
         println!("{}", path.display());
     }
+
+    let finishing = PreviewScene {
+        mode: Mode::Region,
+        cursor: (1130, 640),
+        drag_from: None,
+        window_rects: windows.clone(),
+        trail: Vec::new(),
+        finishing: true,
+    };
+    let finishing_pixels = overlay::render_offscreen(&graphics, &screenshot, finishing)?;
+    let finishing_frame = Image {
+        width: WIDTH as u32,
+        height: screenshot.bounds.height as u32,
+        bgra: finishing_pixels,
+    };
+    let finishing_path = folder.join("finishing.png");
+    output::write_png_to(&output::encode_png(&finishing_frame)?, &finishing_path)?;
+    println!("{}", finishing_path.display());
 
     let snipped = output::crop(&screenshot, windows[1]).ok_or("fake window is off screen")?;
     let (markup_pixels, flattened) = crate::markup::render_offscreen(&graphics, &screenshot, windows[1])?;

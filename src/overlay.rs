@@ -227,6 +227,8 @@ pub struct OverlayOptions {
     /// Offers video, text and colour; the tray process handles those, the plain CLI does not.
     pub extra_tools: bool,
     pub start_tool: Tool,
+    /// Plays the shutter when the mouse is released. Off when a dialog asks first.
+    pub shutter_on_release: bool,
 }
 
 pub struct OverlayOutcome {
@@ -283,9 +285,13 @@ struct OverlayState {
     snap_to_windows: bool,
     /// With start-and-end particles the overlay stays a moment so the last burst shows.
     close_at: Option<Instant>,
+    shutter_on_release: bool,
 }
 
 const PARTICLE_TIMER: usize = 7;
+/// How long the last burst flies after the mouse is released. The overlay already looks gone
+/// by then, so this reads as an effect and not as a wait.
+const FINISH_SECONDS: f32 = 0.18;
 
 /// Shows the overlay and blocks until the user picks an area or cancels.
 pub fn select_area(graphics: &Graphics, screenshot: &Screenshot, options: OverlayOptions) -> Result<OverlayOutcome> {
@@ -331,6 +337,7 @@ pub fn select_area(graphics: &Graphics, screenshot: &Screenshot, options: Overla
     state.snap_to_windows = options.snap_to_windows;
     state.extra_tools = options.extra_tools;
     state.tool = options.start_tool;
+    state.shutter_on_release = options.shutter_on_release;
     if options.particles != ParticleMode::Off {
         state.particles = Some(ParticleSystem::new(cursor.0 as u32 ^ (cursor.1 as u32).rotate_left(16)));
     }
@@ -427,6 +434,8 @@ pub struct PreviewScene {
     pub window_rects: Vec<PixelRect>,
     /// Pointer positions to replay as a drag, about 16 ms apart, for the particles.
     pub trail: Vec<(i32, i32)>,
+    /// Draws the moment after the release: the last burst over the plain desktop.
+    pub finishing: bool,
 }
 
 /// Draws the overlay into memory and returns BGRA pixels the size of the screenshot.
@@ -461,6 +470,15 @@ pub fn render_offscreen(graphics: &Graphics, screenshot: &Screenshot, scene: Pre
             particles.advance(0.016);
         }
         state.particles = Some(particles);
+    }
+    if scene.finishing {
+        let mut particles = ParticleSystem::new(0x5EED);
+        let client = state.to_client(scene.cursor.0, scene.cursor.1);
+        particles.burst(client, [200, 120, 90], 40);
+        particles.hurry(FINISH_SECONDS);
+        particles.advance(0.06);
+        state.particles = Some(particles);
+        state.close_at = Some(Instant::now());
     }
     state.paint();
 
@@ -616,6 +634,9 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, message: u32, wparam: WPARAM,
         }
         WM_LBUTTONDOWN => {
             state.cursor = state.to_screen(lparam);
+            if state.close_at.is_some() {
+                return LRESULT(0);
+            }
             if state.over_close(state.cursor) {
                 state.done = true;
                 return LRESULT(0);
@@ -696,6 +717,7 @@ impl OverlayState {
             show_crosshair: true,
             snap_to_windows: true,
             close_at: None,
+            shutter_on_release: false,
         })
     }
 
@@ -796,9 +818,17 @@ impl OverlayState {
         if let Some(rect) = picked {
             if rect.width >= 2 && rect.height >= 2 {
                 self.selection = Some(rect);
-                if was_dragging && self.particle_mode == ParticleMode::StartAndEnd && self.particles.is_some() {
+                if self.shutter_on_release && self.tool == Tool::Snip {
+                    crate::sound::play_shutter();
+                }
+                // Drawing and recording have their next step waiting, so they do not stop for the effect.
+                let keeps_a_snip = matches!(self.tool, Tool::Snip | Tool::Text);
+                if keeps_a_snip && was_dragging && self.particle_mode == ParticleMode::StartAndEnd && self.particles.is_some() {
                     self.burst_particles(hwnd, self.cursor);
-                    self.close_at = Some(Instant::now() + std::time::Duration::from_millis(350));
+                    if let Some(particles) = self.particles.as_mut() {
+                        particles.hurry(FINISH_SECONDS);
+                    }
+                    self.close_at = Some(Instant::now() + std::time::Duration::from_secs_f32(FINISH_SECONDS));
                     self.paint();
                 } else {
                     self.done = true;
@@ -899,6 +929,16 @@ impl OverlayState {
                 D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 None,
             );
+        }
+        // After the release only the effect is left: the desktop looks back to normal at once.
+        if self.close_at.is_some() {
+            if let Some(particles) = &self.particles {
+                particles.draw(&self.target, &self.particle_brush, &self.graphics().label_format);
+            }
+            unsafe {
+                let _ = target.EndDraw(None, None);
+            }
+            return;
         }
         let highlighted = self.highlighted();
         self.draw_shade(highlighted);

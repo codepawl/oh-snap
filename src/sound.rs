@@ -10,7 +10,16 @@ const SAMPLE_RATE: u32 = 44_100;
 static SHUTTER_WAV: OnceLock<Vec<u8>> = OnceLock::new();
 
 /// Plays without blocking; a sound already playing is cut off.
+/// The overlay plays it on release and the delivery after that, so a second call right after
+/// the first stays silent.
 pub fn play_shutter() {
+    static LAST_PLAYED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    if let Ok(mut last_played) = LAST_PLAYED.lock() {
+        if last_played.is_some_and(|played| played.elapsed() < std::time::Duration::from_millis(600)) {
+            return;
+        }
+        *last_played = Some(std::time::Instant::now());
+    }
     let wav = SHUTTER_WAV.get_or_init(build_shutter_wav);
     unsafe {
         let _ = PlaySoundW(PCWSTR(wav.as_ptr() as *const u16), None, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);

@@ -60,6 +60,7 @@ pub fn pick(
         snap_to_windows: request.settings.snap_to_windows,
         extra_tools,
         start_tool,
+        shutter_on_release: request.settings.shutter_sound && !request.settings.confirm_before_save,
     };
     let outcome = overlay::select_area(graphics, screenshot, options)?;
     if let Some(color) = outcome.color {

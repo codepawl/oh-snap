@@ -73,6 +73,17 @@ impl ParticleSystem {
         }
     }
 
+    /// Makes everything fade out within `seconds`, each at a slightly different moment, so
+    /// nothing is cut off mid-air when the overlay closes.
+    pub fn hurry(&mut self, seconds: f32) {
+        let mut particles = std::mem::take(&mut self.particles);
+        for particle in &mut particles {
+            let left = seconds * (0.6 + self.random() * 0.4);
+            particle.lifetime = particle.lifetime.min(particle.age + left);
+        }
+        self.particles = particles;
+    }
+
     fn spawn(&mut self, point: (f32, f32), pixel: [u8; 3]) {
         let is_glyph = self.random() < 0.4;
         let glyph = if is_glyph {
@@ -167,5 +178,21 @@ impl ParticleSystem {
         self.random_state ^= self.random_state >> 17;
         self.random_state ^= self.random_state << 5;
         self.random_state as f32 / u32::MAX as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hurried_burst_is_gone_in_time() {
+        let mut particles = ParticleSystem::new(7);
+        particles.burst((100.0, 100.0), [10, 20, 30], 40);
+        particles.hurry(0.18);
+        particles.advance(0.1);
+        assert!(!particles.is_empty());
+        particles.advance(0.09);
+        assert!(particles.is_empty());
     }
 }
