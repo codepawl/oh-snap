@@ -70,7 +70,7 @@ impl Default for Settings {
             snap_to_windows: true,
             show_loupe: true,
             show_crosshair: true,
-            particles: ParticleMode::WhileDragging,
+            particles: ParticleMode::StartAndEnd,
             shutter_sound: true,
             copy_to_clipboard: true,
             save_to_folder: true,
