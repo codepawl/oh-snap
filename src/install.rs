@@ -84,6 +84,7 @@ pub fn uninstall() -> InstallResult {
     delete_tree(STATE_KEY);
     delete_tree(PNG_EDIT_KEY);
     let _ = std::fs::remove_file(start_menu_shortcut());
+    crate::history::clear();
     println!("uninstalled; Snipping Tool has its shortcuts back");
     println!("the program files stay in {}", install_folder().display());
     Ok(())

@@ -1039,7 +1039,8 @@ impl Daemon {
 
     /// Swaps the exe and hands over to the new version, which waits for this one to quit.
     fn apply_update(&mut self, version: String, exe: Vec<u8>) {
-        match crate::updater::install(&exe) {
+        let installed = crate::updater::try_new_exe(&exe, &version).and_then(crate::updater::install);
+        match installed {
             Ok(path) => {
                 crate::log::write(&format!("updating to {version}"));
                 if std::process::Command::new(&path).args(["daemon", "--after-update"]).spawn().is_ok() {

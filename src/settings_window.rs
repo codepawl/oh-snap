@@ -65,7 +65,7 @@ enum Field {
     Folder,
     Format,
     Card,
-    CardSeconds,
+    RecentSnips,
     OpenEditor,
     StartAtSignIn,
     Updates,
@@ -121,9 +121,16 @@ fn columns(settings: &Settings) -> [Vec<Section>; 2] {
         vec!["PNG".into(), "JPG".into()],
         Some(if settings.file_format == FileFormat::Png { 0 } else { 1 }),
     );
+    // One row: off, or how long the card stays.
     let card_choice = (
-        CARD_SECONDS_CHOICES.iter().map(|seconds| format!("{seconds} s")).collect(),
-        CARD_SECONDS_CHOICES.iter().position(|seconds| *seconds == settings.card_seconds),
+        std::iter::once("off".to_string())
+            .chain(CARD_SECONDS_CHOICES.iter().map(|seconds| format!("{seconds} s")))
+            .collect(),
+        if settings.show_card {
+            CARD_SECONDS_CHOICES.iter().position(|seconds| *seconds == settings.card_seconds).map(|index| index + 1)
+        } else {
+            Some(0)
+        },
     );
     let update_modes = [UpdateMode::Auto, UpdateMode::Notify, UpdateMode::Off];
     let update_choice = (
@@ -181,8 +188,13 @@ fn columns(settings: &Settings) -> [Vec<Section>; 2] {
                 row(Field::SaveToFolder, icons::SAVE, "Save to folder", on_off(settings.save_to_folder)),
                 row(Field::Folder, icons::FOLDER, "Folder", (folder_actions, None)),
                 row(Field::Format, icons::IMAGE, "Format", format_choice),
-                row(Field::Card, icons::CARD, "Result card", on_off(settings.show_card)),
-                row(Field::CardSeconds, icons::TIMER, "Card stays", card_choice),
+                row(Field::Card, icons::CARD, "Result card", card_choice),
+                row(
+                    Field::RecentSnips,
+                    icons::HISTORY,
+                    "Recent snips",
+                    (vec!["on".into(), "off".into(), "clear".into()], Some(usize::from(!settings.keep_recent_snips))),
+                ),
                 row(Field::OpenEditor, icons::EDIT, "Open editor", on_off(settings.open_editor)),
             ],
         },
@@ -524,8 +536,22 @@ impl SettingsWindow {
             }
             Field::Folder => settings.save_folder = None,
             Field::Format => settings.file_format = if on { FileFormat::Png } else { FileFormat::Jpeg },
-            Field::Card => settings.show_card = on,
-            Field::CardSeconds => settings.card_seconds = CARD_SECONDS_CHOICES[hit.option],
+            Field::Card if hit.option == 0 => settings.show_card = false,
+            Field::Card => {
+                settings.show_card = true;
+                settings.card_seconds = CARD_SECONDS_CHOICES[hit.option - 1];
+            }
+            Field::RecentSnips if hit.option == 2 => {
+                crate::history::clear();
+                return;
+            }
+            Field::RecentSnips => {
+                settings.keep_recent_snips = on;
+                // Off means no copies are left behind, not only that no new ones are made.
+                if !on {
+                    crate::history::clear();
+                }
+            }
             Field::OpenEditor => settings.open_editor = on,
             Field::StartAtSignIn => settings.start_at_sign_in = on,
             Field::Updates => settings.updates = [UpdateMode::Auto, UpdateMode::Notify, UpdateMode::Off][hit.option],

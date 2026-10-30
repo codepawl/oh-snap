@@ -30,6 +30,11 @@ pub fn record(png_bytes: &[u8]) -> Option<PathBuf> {
     Some(path)
 }
 
+/// Deletes every kept snip.
+pub fn clear() {
+    let _ = std::fs::remove_dir_all(folder());
+}
+
 /// The kept snips, newest first.
 pub fn list() -> Vec<PathBuf> {
     newest_first(&folder())

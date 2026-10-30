@@ -8,7 +8,7 @@
 //! HTTP goes through WinHTTP and hashing through CNG, both part of Windows, so the
 //! updater adds no dependency and almost no size.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use windows::Win32::Networking::WinHttp::{
     INTERNET_DEFAULT_HTTPS_PORT, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE, WINHTTP_OPTION_URL,
@@ -21,6 +21,7 @@ use windows::core::{HSTRING, PCWSTR};
 
 const RELEASES: &str = "https://github.com/codepawl/oh-snap/releases";
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const TRY_SECONDS: u64 = 10;
 
 #[derive(Debug, Clone)]
 pub struct Release {
@@ -75,26 +76,89 @@ pub fn download(release: &Release) -> Result<Vec<u8>, String> {
     Ok(exe)
 }
 
-/// Puts the new exe where this one is. Windows lets a running exe be renamed, so this one
-/// moves aside to oh-snap.old.exe and is deleted by the next start.
-pub fn install(new_exe: &[u8]) -> Result<PathBuf, String> {
+/// A new exe that has been written next to this one and has run.
+pub struct TriedExe {
+    path: PathBuf,
+}
+
+/// Writes the new exe next to this one and runs it once. A release that does not start, or
+/// that Windows blocks, stops here, while the working program is still untouched.
+pub fn try_new_exe(new_exe: &[u8], version: &str) -> Result<TriedExe, String> {
     let current = std::env::current_exe().map_err(|error| error.to_string())?;
-    let old = old_exe_path(&current);
-    let _ = std::fs::remove_file(&old);
-    std::fs::rename(&current, &old).map_err(|error| format!("could not move the running program aside: {error}"))?;
-    if let Err(error) = std::fs::write(&current, new_exe) {
-        // Put the working program back before reporting.
-        let _ = std::fs::rename(&old, &current);
-        return Err(format!("could not write the new program: {error}"));
-    }
+    write_and_try(&new_exe_path(&current), new_exe, |path| reports_version(path, version))
+}
+
+/// Puts the tried exe where this one is. Windows lets a running exe be renamed, so this one
+/// moves aside to oh-snap.old.exe and is deleted by the next start.
+pub fn install(tried: TriedExe) -> Result<PathBuf, String> {
+    let current = std::env::current_exe().map_err(|error| error.to_string())?;
+    swap_in(&tried, &current)?;
     Ok(current)
 }
 
-/// Removes the previous exe an update left behind.
+fn write_and_try(path: &Path, new_exe: &[u8], try_it: impl Fn(&Path) -> Result<(), String>) -> Result<TriedExe, String> {
+    std::fs::write(path, new_exe).map_err(|error| format!("could not write the new program: {error}"))?;
+    if let Err(error) = try_it(path) {
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(TriedExe { path: path.to_path_buf() })
+}
+
+fn swap_in(tried: &TriedExe, current: &Path) -> Result<(), String> {
+    let old = old_exe_path(current);
+    let _ = std::fs::remove_file(&old);
+    std::fs::rename(current, &old).map_err(|error| format!("could not move the running program aside: {error}"))?;
+    if let Err(error) = std::fs::rename(&tried.path, current) {
+        // Put the working program back before reporting.
+        let _ = std::fs::rename(&old, current);
+        return Err(format!("could not put the new program in place: {error}"));
+    }
+    Ok(())
+}
+
+/// Runs `<exe> --version` and wants this version back within a few seconds.
+fn reports_version(exe: &Path, version: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut child = std::process::Command::new(exe)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|error| format!("the new program would not start: {error}"))?;
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() > std::time::Duration::from_secs(TRY_SECONDS) => {
+                let _ = child.kill();
+                return Err("the new program did not answer".into());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    let output = child.wait_with_output().map_err(|error| error.to_string())?;
+    let answer = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() || answer.trim() != format!("oh-snap {version}") {
+        return Err(format!("the new program answered `{}` with exit code {:?}", answer.trim(), output.status.code()));
+    }
+    Ok(())
+}
+
+/// Removes what an update left behind.
 pub fn clean_up_old_exe() {
     if let Ok(current) = std::env::current_exe() {
         let _ = std::fs::remove_file(old_exe_path(&current));
+        let _ = std::fs::remove_file(new_exe_path(&current));
     }
+}
+
+fn new_exe_path(current: &Path) -> PathBuf {
+    current.with_file_name("oh-snap.new.exe")
 }
 
 fn old_exe_path(current: &std::path::Path) -> PathBuf {
@@ -227,8 +291,10 @@ pub fn command() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("downloading {}...", release.version);
     let new_exe = download(&release)?;
+    // Tried first: a bad release must not cost the running tray process.
+    let tried = try_new_exe(&new_exe, &release.version)?;
     let daemon_was_running = stop_own_daemon();
-    let path = install(&new_exe)?;
+    let path = install(tried)?;
     if daemon_was_running {
         std::process::Command::new(&path).args(["daemon", "--after-update"]).spawn()?;
     }
@@ -261,6 +327,49 @@ fn stop_own_daemon() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_folder(name: &str) -> PathBuf {
+        let folder = std::env::temp_dir().join(format!("oh-snap-update-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        folder
+    }
+
+    #[test]
+    fn a_new_exe_that_fails_its_try_leaves_everything_as_it_was() {
+        let folder = test_folder("fails");
+        let current = folder.join("oh-snap.exe");
+        std::fs::write(&current, b"working").unwrap();
+        let new_path = new_exe_path(&current);
+        let result = write_and_try(&new_path, b"broken", |_| Err("does not start".into()));
+        assert!(result.is_err());
+        assert!(!new_path.exists());
+        assert_eq!(std::fs::read(&current).unwrap(), b"working");
+        assert!(!old_exe_path(&current).exists());
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_tried_exe_takes_over_and_the_old_one_moves_aside() {
+        let folder = test_folder("works");
+        let current = folder.join("oh-snap.exe");
+        std::fs::write(&current, b"working").unwrap();
+        let tried = write_and_try(&new_exe_path(&current), b"newer", |_| Ok(())).unwrap();
+        swap_in(&tried, &current).unwrap();
+        assert_eq!(std::fs::read(&current).unwrap(), b"newer");
+        assert_eq!(std::fs::read(old_exe_path(&current)).unwrap(), b"working");
+        assert!(!new_exe_path(&current).exists());
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_program_that_is_not_oh_snap_fails_the_try() {
+        let folder = test_folder("garbage");
+        let fake = folder.join("fake.exe");
+        std::fs::write(&fake, b"MZ this is not a program").unwrap();
+        assert!(reports_version(&fake, "9.9.9").is_err());
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 
     #[test]
     fn versions_compare_by_number() {

@@ -2,7 +2,7 @@
 
 # oh-snap
 
-A fast screen snipping tool for Windows, written in Rust. It replaces Snipping Tool for PrtSc, Win+Shift+S and `ms-screenclip:` links. The program is one file of about 0.8 MB.
+A fast screen snipping tool for Windows, written in Rust. It replaces Snipping Tool for PrtSc, Win+Shift+S and `ms-screenclip:` links. The program is one file of about 1.3 MB.
 
 ![The oh-snap overlay over a desktop](docs/overlay.png)
 
@@ -54,7 +54,7 @@ Open the settings from the tray menu or with `oh-snap settings`. A change saves 
 | Capture | Default mode, delay of 3, 5 or 10 seconds, ask before saving, snap to windows, loupe, crosshair |
 | Effects | Drag particles: while dragging, at the start and end of the drag, or off. Shutter sound |
 | Shortcuts | PrtSc, Win+Shift+S, Win+Shift+R |
-| After capture | Copy to clipboard, save to folder, folder, PNG or JPG, result card and how long it stays, open the editor |
+| After capture | Copy to clipboard, save to folder, folder, PNG or JPG, result card and how long it stays, recent snips, open the editor |
 | Recording | Frame rate of 30 or 60, system sound, microphone |
 | System | Start at sign-in, updates: install on their own, only tell you, or off. `check now` looks at once |
 
@@ -102,13 +102,14 @@ Measured with `oh-snap bench compare 6` on Windows 11 build 26300, two 1920x1080
 
 | | oh-snap | Snipping Tool |
 | --- | --- | --- |
-| Overlay window shows (median) | 22 ms | 286 ms |
-| Screen dims (median) | 44 ms | 309 ms |
-| First snip after start | 47 ms | 801 ms |
-| Memory, working set | 84 MB in 1 process | 392 MB in 2 processes |
-| Size on disk | 0.8 MB | 586 MB |
+| Overlay window shows (median) | 20 ms | 366 ms |
+| Screen dims (median) | 51 ms | 387 ms |
+| First snip after start | 81 ms | 1033 ms |
+| Memory while in use, working set | 84 MB in 1 process | 392 MB in 2 processes |
+| Memory while waiting, working set | 0.5 MB | not running |
+| Size on disk | 1.3 MB | 586 MB |
 
-Run the same test on your computer with `oh-snap bench compare`. It opens and closes both overlays a few times.
+The speed numbers are from version 0.10.2, while other programs used about half of the CPU and most of the GPU. The memory while in use and the size of Snipping Tool are older measurements. Run the same test on your computer with `oh-snap bench compare`. It opens and closes both overlays a few times.
 
 ## Commands
 
@@ -146,13 +147,13 @@ Press `C` on the overlay to copy the colour under the pointer as a hex value. Th
 
 Press Shift+PrtSc to snip the last area again without the overlay, for before and after shots.
 
-The tray menu lists your last 10 snips under `recent snips`. Picking one puts it back on the clipboard and shows its card. For this, oh-snap keeps the last 20 snips in `%LOCALAPPDATA%\oh-snap\history`, also when saving to a folder is off.
+The tray menu lists your last 10 snips under `recent snips`. Picking one puts it back on the clipboard and shows its card. For this, oh-snap keeps the last 20 snips in `%LOCALAPPDATA%\oh-snap\history`, also when saving to a folder is off. Set `Recent snips` to `off` in the settings to keep none and delete those copies, or pick `clear` to delete them once. `oh-snap uninstall` deletes them too.
 
 Drag the image on the card into a chat, a browser or Explorer to drop the file there.
 
 Right-click a snip and pick `pin to screen` to keep it on top of every window while you work. Drag the pin to move it, scroll to zoom, and Ctrl+scroll to make it see-through. Ctrl+C copies it, and Esc or a double-click closes it.
 
-oh-snap updates itself from GitHub Releases. The tray process looks for a new version 10 seconds after it starts and then every 6 hours. It downloads the new `oh-snap.exe`, checks it against the release's `SHA256SUMS.txt`, and swaps it in between snips, never in the middle of one. A card then shows the new version. Set `Updates` to `notify` to get only the card, or to `off`.
+oh-snap updates itself from GitHub Releases. The tray process looks for a new version 10 seconds after it starts and then every 6 hours. It downloads the new `oh-snap.exe`, checks it against the release's `SHA256SUMS.txt`, runs it once to see that it starts, and swaps it in between snips, never in the middle of one. If a check fails, the working version stays. A card then shows the new version. Set `Updates` to `notify` to get only the card, or to `off`.
 
 Other apps and scripts can start a snip with `oh-snap capture` or an `oh-snap://capture/window` link.
 

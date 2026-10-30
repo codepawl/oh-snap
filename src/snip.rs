@@ -130,7 +130,7 @@ pub fn deliver_image(
     if settings.copy_to_clipboard {
         output::copy_to_clipboard(owner, &image, &png_bytes)?;
     }
-    let history = crate::history::record(&png_bytes);
+    let history = if settings.keep_recent_snips { crate::history::record(&png_bytes) } else { None };
     let mut saved_to = None;
     if let Some(path) = &request.output_path {
         output::write_png_to(&png_bytes, path)?;
