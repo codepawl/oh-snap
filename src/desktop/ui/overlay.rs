@@ -36,6 +36,7 @@ pub enum Key {
     Right,
     Up,
     Down,
+    Backspace,
     Char(char),
 }
 
@@ -383,6 +384,7 @@ impl OverlayState {
             Key::Right => self.nudge(step, 0),
             Key::Up => self.nudge(0, -step),
             Key::Down => self.nudge(0, step),
+            Key::Backspace => {}
         }
     }
 

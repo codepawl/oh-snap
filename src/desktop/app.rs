@@ -21,9 +21,11 @@ use super::platform::{Platform, RecordOptions, Recording, Screen, Trigger};
 use super::socket;
 use super::ui::card::{self, CardAction, CardLayout, CardModel};
 use super::ui::canvas;
+use super::ui::markup::{Ending, MarkupState};
 use super::ui::overlay::{Key, Outcome, OverlayOptions, OverlayState, Pick};
 use super::ui::recording_bar::{self, BarAction, BarLayout, BarModel};
 use super::ui::text::Fonts;
+use super::ui::trim::{TrimOutcome, TrimState};
 use super::update::{self, UpdateResult};
 use crate::mode::{Mode, Tool};
 use crate::output::{self, Image};
@@ -43,6 +45,7 @@ enum Kind {
     Overlay(usize),
     Card,
     Bar,
+    Trim,
 }
 
 struct Managed {
@@ -63,6 +66,8 @@ struct CardContent {
     failed: bool,
     path: Option<PathBuf>,
     image: Option<Image>,
+    /// A recording's length, which the trim window needs.
+    recording_length: Option<Duration>,
 }
 
 struct CardState {
@@ -71,6 +76,7 @@ struct CardState {
     layout: CardLayout,
     path: Option<PathBuf>,
     image: Option<Image>,
+    recording_length: Option<Duration>,
     hovered: Option<CardAction>,
     shown_for: Duration,
     lifetime: Duration,
@@ -94,6 +100,13 @@ impl ActiveRecording {
     }
 }
 
+/// The trim window and the recording it cuts.
+struct TrimSession {
+    window: WindowId,
+    state: TrimState,
+    path: PathBuf,
+}
+
 struct App {
     platform: Arc<dyn Platform>,
     proxy: EventLoopProxy<UserEvent>,
@@ -104,12 +117,17 @@ struct App {
     context: Option<Context<OwnedDisplayHandle>>,
     windows: HashMap<WindowId, Managed>,
     session: Option<OverlayState>,
+    /// Drawing on the picked area, in the overlay window of its screen.
+    markup: Option<MarkupState>,
+    trim: Option<TrimSession>,
     card: Option<CardState>,
     recording: Option<ActiveRecording>,
     delayed: Option<(Instant, Trigger)>,
     first: Option<Trigger>,
     started: bool,
     shift: bool,
+    /// Ctrl on Linux, Cmd on macOS.
+    command: bool,
     next_update_check: Option<Instant>,
     update_running: bool,
 }
@@ -144,12 +162,15 @@ pub fn run(first: Option<(Trigger, bool)>, overrides: Overrides) -> Result<(), S
         context: None,
         windows: HashMap::new(),
         session: None,
+        markup: None,
+        trim: None,
         card: None,
         recording: None,
         delayed: None,
         first: first.map(|(trigger, _)| trigger),
         started: false,
         shift: false,
+        command: false,
         next_update_check,
         update_running: false,
     };
@@ -210,9 +231,21 @@ impl ApplicationHandler<UserEvent> for App {
         }) else {
             return;
         };
+        if let WindowEvent::ModifiersChanged(modifiers) = &event {
+            self.shift = modifiers.state().shift_key();
+            self.command = modifiers.state().control_key() || modifiers.state().super_key();
+            return;
+        }
+        if matches!(event, WindowEvent::RedrawRequested) {
+            return self.paint(id);
+        }
+        if self.trim.as_ref().is_some_and(|trim| trim.window == id) {
+            return self.trim_event(event_loop, event);
+        }
+        if self.markup.is_some() && kind.is_some() {
+            return self.markup_event(event_loop, event);
+        }
         match event {
-            WindowEvent::RedrawRequested => self.paint(id),
-            WindowEvent::ModifiersChanged(modifiers) => self.shift = modifiers.state().shift_key(),
             WindowEvent::CursorMoved { position, .. } => self.cursor_moved(id, kind, position),
             WindowEvent::CursorLeft { .. } => self.cursor_left(id),
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => self.pressed(event_loop, id, kind),
@@ -272,6 +305,8 @@ fn overlay_key(key: &LogicalKey) -> Option<Key> {
         LogicalKey::Named(NamedKey::ArrowRight) => Some(Key::Right),
         LogicalKey::Named(NamedKey::ArrowUp) => Some(Key::Up),
         LogicalKey::Named(NamedKey::ArrowDown) => Some(Key::Down),
+        LogicalKey::Named(NamedKey::Backspace) => Some(Key::Backspace),
+        LogicalKey::Named(NamedKey::Space) => Some(Key::Char(' ')),
         LogicalKey::Character(text) => text.chars().next().map(Key::Char),
         _ => None,
     }
@@ -279,7 +314,7 @@ fn overlay_key(key: &LogicalKey) -> Option<Key> {
 
 impl App {
     fn busy(&self) -> bool {
-        self.session.is_some() || self.recording.is_some() || self.delayed.is_some()
+        self.session.is_some() || self.markup.is_some() || self.trim.is_some() || self.recording.is_some() || self.delayed.is_some()
     }
 
     fn handle_trigger(&mut self, event_loop: &ActiveEventLoop, trigger: Trigger) {
@@ -291,7 +326,7 @@ impl App {
                 event_loop.exit();
             }
             Trigger::Record if self.recording.is_some() => self.stop_recording(event_loop),
-            _ if self.session.is_some() || self.recording.is_some() => {}
+            _ if self.session.is_some() || self.markup.is_some() || self.recording.is_some() => {}
             Trigger::Snip(mode) => self.start_snip(event_loop, mode, Tool::Snip),
             Trigger::Record => self.start_snip(event_loop, Mode::Region, Tool::Record),
             Trigger::LastRegion => self.capture_last_region(event_loop),
@@ -366,7 +401,9 @@ impl App {
         };
         match managed.kind {
             Kind::Overlay(index) => {
-                if let Some(state) = &self.session {
+                if let Some(markup) = &self.markup {
+                    markup.render(&self.fonts, &mut pixmap);
+                } else if let Some(state) = &self.session {
                     state.render(index, &self.fonts, &mut pixmap);
                 }
             }
@@ -379,6 +416,11 @@ impl App {
                 if let Some(recording) = &self.recording {
                     let model = BarModel { elapsed_milliseconds: recording.elapsed().as_millis() as u64, paused: recording.paused_since.is_some() };
                     recording_bar::render(&model, &recording.layout, recording.hovered, &self.fonts, &mut pixmap);
+                }
+            }
+            Kind::Trim => {
+                if let Some(trim) = &self.trim {
+                    trim.state.render(&self.fonts, &mut pixmap);
                 }
             }
         }
@@ -506,15 +548,17 @@ impl App {
             self.redraw_all_overlays();
             return;
         }
-        // Shutter feel: the shade goes away before anything slow happens.
-        let overlay_ids: Vec<WindowId> = self.windows.iter().filter(|(_, managed)| matches!(managed.kind, Kind::Overlay(_))).map(|(id, _)| *id).collect();
-        for id in overlay_ids {
-            self.close_window(id);
+        let outcome = self.session.as_ref().and_then(|state| state.outcome().cloned()).unwrap_or(Outcome::Cancelled);
+        if let Outcome::Picked(pick) = &outcome {
+            if pick.tool == Tool::Draw && self.start_markup(pick) {
+                return;
+            }
         }
+        // Shutter feel: the shade goes away before anything slow happens.
+        self.close_overlay_windows(None);
         let Some(state) = self.session.take() else {
             return;
         };
-        let outcome = state.outcome().cloned().unwrap_or(Outcome::Cancelled);
         let screens = state.into_screens();
         match outcome {
             Outcome::Cancelled => self.finish_one_shot(event_loop),
@@ -554,9 +598,80 @@ impl App {
         match pick.tool {
             Tool::Text => self.finish_text(event_loop, &image),
             Tool::Record => self.start_recording(event_loop, global, screen.scale),
-            // TODO(draw): open the markup editor on `image` once the shared editor exists;
-            // until then a draw pick is saved like a snip.
+            // A draw pick normally went to `start_markup`; it is saved like a snip only when
+            // the drawing step could not open.
             Tool::Snip | Tool::Draw | Tool::Color => self.finish_snip(event_loop, image),
+        }
+        self.finish_one_shot(event_loop);
+    }
+
+    // ------------------------------------------------------------ drawing
+
+    fn close_overlay_windows(&mut self, keep: Option<usize>) {
+        let ids: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|(_, managed)| matches!(managed.kind, Kind::Overlay(index) if Some(index) != keep))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.close_window(id);
+        }
+    }
+
+    /// Keeps the overlay window of the picked screen and draws on the picked area in it.
+    /// False when that cannot be set up.
+    fn start_markup(&mut self, pick: &Pick) -> bool {
+        let Some(state) = self.session.as_ref() else {
+            return false;
+        };
+        let screen = &state.screens()[pick.screen];
+        let mut image = canvas::crop_image(&screen.image, pick.area);
+        if let Some(outline) = &pick.outline {
+            output::keep_inside(&mut image, outline);
+        }
+        let global = (screen.x + pick.area.0, screen.y + pick.area.1, pick.area.2, pick.area.3);
+        let Some(markup) = MarkupState::new(&screen.image, screen.scale, pick.area, image) else {
+            return false;
+        };
+        finish::remember_region(global);
+        self.close_overlay_windows(Some(pick.screen));
+        self.session = None;
+        self.markup = Some(markup);
+        self.redraw_all_overlays();
+        true
+    }
+
+    fn markup_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
+        let (shift, command) = (self.shift, self.command);
+        let Some(markup) = self.markup.as_mut() else {
+            return;
+        };
+        match event {
+            WindowEvent::CursorMoved { position, .. } => markup.mouse_moved(position.x as f32, position.y as f32),
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => markup.mouse_pressed(&self.fonts),
+            WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => markup.mouse_released(),
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => match overlay_key(&event.logical_key) {
+                Some(key) => markup.key_pressed(key, shift, command),
+                None => return,
+            },
+            WindowEvent::CloseRequested => markup.cancel(),
+            _ => return,
+        }
+        self.after_markup_input(event_loop);
+    }
+
+    fn after_markup_input(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(ending) = self.markup.as_ref().and_then(|markup| markup.ending()) else {
+            return self.redraw_all_overlays();
+        };
+        self.close_overlay_windows(None);
+        let Some(markup) = self.markup.take() else {
+            return;
+        };
+        if ending == Ending::Done {
+            let image = markup.flattened(&self.fonts);
+            self.finish_snip(event_loop, image);
         }
         self.finish_one_shot(event_loop);
     }
@@ -709,6 +824,7 @@ impl App {
         let Some(recording) = self.recording.take() else {
             return;
         };
+        let length = recording.elapsed();
         self.close_window(recording.bar);
         match recording.handle.stop() {
             Ok(path) => {
@@ -721,6 +837,7 @@ impl App {
                     detail: finish::file_name(&path),
                     actions: vec![CardAction::Open, CardAction::Gif, CardAction::Trim, CardAction::Folder],
                     path: Some(path),
+                    recording_length: Some(length),
                     ..CardContent::default()
                 };
                 self.show_card(event_loop, content);
@@ -799,7 +916,7 @@ impl App {
             return;
         };
         let lifetime = Duration::from_secs(u64::from(self.settings.card_seconds.max(1)));
-        self.card = Some(CardState { window: id, model, layout, path: content.path, image: content.image, hovered: None, shown_for: Duration::ZERO, lifetime, last_tick: Instant::now() });
+        self.card = Some(CardState { window: id, model, layout, path: content.path, image: content.image, recording_length: content.recording_length, hovered: None, shown_for: Duration::ZERO, lifetime, last_tick: Instant::now() });
     }
 
     fn close_card_if(&mut self, id: WindowId) {
@@ -837,19 +954,91 @@ impl App {
         // Using a button keeps the card for a while longer.
         card.shown_for = Duration::ZERO;
         let path = card.path.clone();
+        let length = card.recording_length;
         match (action, path) {
             (CardAction::Open, Some(path)) => self.platform.open(&path),
             (CardAction::Folder, Some(path)) => self.platform.reveal(&path),
             (CardAction::Copy, _) => self.copy_card_image(),
             (CardAction::Gif, Some(path)) => self.make_in_background("gif ready", move |platform| platform.make_gif(&path)),
-            // TODO(trim): a range UI. Until then the card puts the command on the clipboard.
-            (CardAction::Trim, Some(path)) => {
-                let command = format!("oh-snap trim {} --from 0 --to 5", path.display());
-                let _ = self.platform.copy_text(&command);
-                self.show_note(event_loop, "trim from the terminal", "command copied to the clipboard");
-            }
+            (CardAction::Trim, Some(path)) => match length {
+                Some(length) => self.open_trim(event_loop, path, length),
+                None => self.show_note(event_loop, "cannot trim this", "its length is not known"),
+            },
             _ => {}
         }
+    }
+
+    // ------------------------------------------------------------ trimming
+
+    fn open_trim(&mut self, event_loop: &ActiveEventLoop, path: PathBuf, length: Duration) {
+        if self.trim.is_some() {
+            return;
+        }
+        let monitor = event_loop.primary_monitor().or_else(|| event_loop.available_monitors().next());
+        let scale = monitor.as_ref().map_or(1.0, |monitor| monitor.scale_factor() as f32);
+        let state = TrimState::new(&self.fonts, scale, length, finish::file_name(&path));
+        let (width, height) = (state.layout().width, state.layout().height);
+        let (left, top) = match &monitor {
+            Some(monitor) => (
+                f64::from(monitor.position().x) + (f64::from(monitor.size().width) - f64::from(width)) / 2.0,
+                f64::from(monitor.position().y) + (f64::from(monitor.size().height) - f64::from(height)) / 2.0,
+            ),
+            None => (0.0, 0.0),
+        };
+        let attributes = Window::default_attributes()
+            .with_title("oh-snap trim")
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_window_level(WindowLevel::AlwaysOnTop)
+            .with_position(PhysicalPosition::new(left, top))
+            .with_inner_size(PhysicalSize::new(width, height));
+        let Ok(window) = event_loop.create_window(attributes) else {
+            return self.show_failure(event_loop, "trim failed", "cannot open the trim window");
+        };
+        let Some(id) = self.make_window(event_loop, window, Kind::Trim) else {
+            return;
+        };
+        if let Some(managed) = self.windows.get(&id) {
+            managed.window.focus_window();
+            managed.window.request_redraw();
+        }
+        self.trim = Some(TrimSession { window: id, state, path });
+    }
+
+    fn trim_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
+        let Some(trim) = self.trim.as_mut() else {
+            return;
+        };
+        match event {
+            WindowEvent::CursorMoved { position, .. } => trim.state.mouse_moved(position.x as f32, position.y as f32),
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => trim.state.mouse_pressed(),
+            WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => trim.state.mouse_released(),
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => match overlay_key(&event.logical_key) {
+                Some(key) => trim.state.key_pressed(key),
+                None => return,
+            },
+            WindowEvent::CloseRequested => trim.state.key_pressed(Key::Escape),
+            _ => return,
+        }
+        let Some(outcome) = trim.state.outcome() else {
+            if let Some(managed) = self.windows.get(&trim.window) {
+                managed.window.request_redraw();
+            }
+            return;
+        };
+        let Some(trim) = self.trim.take() else {
+            return;
+        };
+        self.close_window(trim.window);
+        if outcome != TrimOutcome::Keep {
+            return;
+        }
+        if trim.state.range().is_whole() {
+            return self.show_note(event_loop, "nothing to trim", "move a handle first");
+        }
+        let (from, to) = trim.state.seconds();
+        let path = trim.path;
+        self.make_in_background("trim saved", move |platform| platform.trim(&path, from, to));
     }
 
     fn copy_card_image(&mut self) {

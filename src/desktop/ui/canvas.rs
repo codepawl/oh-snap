@@ -70,6 +70,27 @@ pub fn polyline(pixmap: &mut Pixmap, points: &[(f32, f32)], color: Color, width:
     }
 }
 
+pub fn fill_polygon(pixmap: &mut Pixmap, points: &[(f32, f32)], color: Color) {
+    let Some(first) = points.first() else {
+        return;
+    };
+    let mut builder = PathBuilder::new();
+    builder.move_to(first.0, first.1);
+    for point in &points[1..] {
+        builder.line_to(point.0, point.1);
+    }
+    builder.close();
+    if let Some(path) = builder.finish() {
+        pixmap.fill_path(&path, &paint(color), FillRule::Winding, Transform::identity(), None);
+    }
+}
+
+pub fn stroke_circle(pixmap: &mut Pixmap, center: (f32, f32), radius: f32, color: Color, width: f32) {
+    if let Some(path) = PathBuilder::from_circle(center.0, center.1, radius) {
+        pixmap.stroke_path(&path, &paint(color), &stroke_of(width), Transform::identity(), None);
+    }
+}
+
 pub fn fill_circle(pixmap: &mut Pixmap, center: (f32, f32), radius: f32, color: Color) {
     if let Some(path) = PathBuilder::from_circle(center.0, center.1, radius) {
         pixmap.fill_path(&path, &paint(color), FillRule::Winding, Transform::identity(), None);
@@ -111,6 +132,15 @@ pub fn pixmap_from_image(image: &Image) -> Option<Pixmap> {
         target.copy_from_slice(&[source[2], source[1], source[0], source[3]]);
     }
     Some(pixmap)
+}
+
+/// The opaque BGRA image of a pixmap (the inverse of `pixmap_from_image`).
+pub fn image_from_pixmap(pixmap: &Pixmap) -> Image {
+    let mut bgra = Vec::with_capacity(pixmap.data().len());
+    for pixel in pixmap.data().chunks_exact(4) {
+        bgra.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+    }
+    Image { width: pixmap.width(), height: pixmap.height(), bgra }
 }
 
 /// Draws `source` over the whole of `destination`, scaled when the sizes differ.
@@ -174,5 +204,6 @@ mod tests {
         let image = Image { width: 1, height: 1, bgra: vec![10, 20, 30, 255] };
         let pixmap = pixmap_from_image(&image).unwrap();
         assert_eq!(pixmap.data(), &[30, 20, 10, 255]);
+        assert_eq!(image_from_pixmap(&pixmap).bgra, image.bgra);
     }
 }
