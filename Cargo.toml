@@ -11,9 +11,11 @@ gif = "0.14"
 rqrr = "0.11"
 jpeg-encoder = "0.7"
 png = "0.18"
+
+[target.'cfg(windows)'.dependencies]
 windows-numerics = "0.3"
 
-[dependencies.windows]
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
 features = [
     "Foundation_Collections",
@@ -69,3 +71,10 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[target.'cfg(not(windows))'.dependencies]
+libc = "0.2"
+winit = "0.30"
+softbuffer = "0.4"
+tiny-skia = "0.12"
+fontdue = "0.9"

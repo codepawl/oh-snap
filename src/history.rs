@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use windows::Win32::System::SystemInformation::GetLocalTime;
+use crate::clock::local_time;
 
 const KEPT: usize = 20;
 /// How many the tray menu lists.
@@ -17,10 +17,10 @@ pub fn folder() -> PathBuf {
 pub fn record(png_bytes: &[u8]) -> Option<PathBuf> {
     let folder = folder();
     std::fs::create_dir_all(&folder).ok()?;
-    let time = unsafe { GetLocalTime() };
+    let time = local_time();
     let name = format!(
         "{:04}-{:02}-{:02} {:02}{:02}{:02}-{:03}.png",
-        time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond, time.wMilliseconds
+        time.year, time.month, time.day, time.hour, time.minute, time.second, time.millisecond
     );
     let path = folder.join(name);
     std::fs::write(&path, png_bytes).ok()?;

@@ -1,19 +1,20 @@
-//! The look: a terminal's mono type in Claude's warm palette, ivory on warm ink with
-//! a clay-orange accent.
+//! The look in Direct2D terms. The colours themselves are in `palette`.
 
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 
-pub const INK: D2D1_COLOR_F = rgb(0x1F, 0x1E, 0x1D, 1.0);
-pub const INK_PANEL: D2D1_COLOR_F = rgb(0x26, 0x26, 0x24, 0.96);
-pub const TEXT: D2D1_COLOR_F = rgb(0xF0, 0xEE, 0xE6, 1.0);
-pub const TEXT_DIM: D2D1_COLOR_F = rgb(0xA3, 0x9E, 0x93, 1.0);
-pub const RULE: D2D1_COLOR_F = rgb(0x3E, 0x3C, 0x38, 1.0);
-pub const HOVER: D2D1_COLOR_F = rgb(0xF0, 0xEE, 0xE6, 0.07);
-pub const ACCENT: D2D1_COLOR_F = rgb(0xD9, 0x77, 0x57, 1.0);
-pub const ACCENT_SOFT: D2D1_COLOR_F = rgb(0xD9, 0x77, 0x57, 0.16);
-pub const SHADE: D2D1_COLOR_F = rgb(0x14, 0x14, 0x13, 0.58);
-pub const CROSSHAIR: D2D1_COLOR_F = rgb(0xF0, 0xEE, 0xE6, 0.32);
-pub const FAILURE: D2D1_COLOR_F = rgb(0xE5, 0x53, 0x4B, 1.0);
+use crate::palette::{self, Rgba};
+
+pub const INK: D2D1_COLOR_F = direct2d(palette::INK);
+pub const INK_PANEL: D2D1_COLOR_F = direct2d(palette::INK_PANEL);
+pub const TEXT: D2D1_COLOR_F = direct2d(palette::TEXT);
+pub const TEXT_DIM: D2D1_COLOR_F = direct2d(palette::TEXT_DIM);
+pub const RULE: D2D1_COLOR_F = direct2d(palette::RULE);
+pub const HOVER: D2D1_COLOR_F = direct2d(palette::HOVER);
+pub const ACCENT: D2D1_COLOR_F = direct2d(palette::ACCENT);
+pub const ACCENT_SOFT: D2D1_COLOR_F = direct2d(palette::ACCENT_SOFT);
+pub const SHADE: D2D1_COLOR_F = direct2d(palette::SHADE);
+pub const CROSSHAIR: D2D1_COLOR_F = direct2d(palette::CROSSHAIR);
+pub const FAILURE: D2D1_COLOR_F = direct2d(palette::FAILURE);
 
 /// Tried in order; Consolas ships with every Windows install.
 pub const MONO_FONTS: [&str; 3] = ["Cascadia Mono", "Cascadia Code", "Consolas"];
@@ -28,6 +29,15 @@ pub const BUTTON_RADIUS: f32 = 4.0;
 
 pub const LOUPE_CELLS: i32 = 11;
 pub const LOUPE_CELL_SIZE: f32 = 10.0;
+
+pub const fn direct2d(color: Rgba) -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: color.red,
+        g: color.green,
+        b: color.blue,
+        a: color.alpha,
+    }
+}
 
 pub const fn rgb(red: u8, green: u8, blue: u8, alpha: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {

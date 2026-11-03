@@ -1,25 +1,36 @@
 //! Leaves a line in the log when the program dies, so a report can say where: the tray process
 //! has no console, and Windows often keeps no record of its own.
 
+#[cfg(windows)]
 use windows::Win32::System::Diagnostics::Debug::{EXCEPTION_POINTERS, SetUnhandledExceptionFilter};
+#[cfg(windows)]
 use windows::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW,
     GetModuleHandleExW,
 };
+#[cfg(windows)]
 use windows::core::PCWSTR;
 
+#[cfg(windows)]
 const CONTINUE_SEARCH: i32 = 0;
 
+/// Hooks everything this OS can report: native exceptions on Windows, panics everywhere.
 pub fn install() {
+    #[cfg(windows)]
     unsafe {
         let _ = SetUnhandledExceptionFilter(Some(on_exception));
     }
+    install_panic_hook();
+}
+
+fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let one_line = info.to_string().replace('\n', " ");
-        crate::log::write(&format!("crash in {}: panic: {one_line}", crate::updater::CURRENT_VERSION));
+        crate::log::write(&format!("crash in {}: panic: {one_line}", env!("CARGO_PKG_VERSION")));
     }));
 }
 
+#[cfg(windows)]
 unsafe extern "system" fn on_exception(info: *const EXCEPTION_POINTERS) -> i32 {
     let record = unsafe { &*(*info).ExceptionRecord };
     let address = record.ExceptionAddress as usize;
@@ -43,12 +54,13 @@ unsafe extern "system" fn on_exception(info: *const EXCEPTION_POINTERS) -> i32 {
     };
     crate::log::write(&format!(
         "crash in {}: exception {:#x} at {place}",
-        crate::updater::CURRENT_VERSION,
+        env!("CARGO_PKG_VERSION"),
         record.ExceptionCode.0 as u32
     ));
     CONTINUE_SEARCH
 }
 
+#[cfg(windows)]
 /// `oh-snap crash-test [panic]`: dies on purpose, to prove that the log gets its line.
 pub fn test(kind: Option<&str>) -> ! {
     if kind == Some("panic") {
