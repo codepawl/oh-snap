@@ -27,6 +27,7 @@ asset_name() {
                 *) fail "no build for Linux on $machine" ;;
             esac
             ;;
+        Darwin) echo "oh-snap-macos.zip" ;;
         *) fail "no build for $system yet" ;;
     esac
 }
@@ -43,7 +44,6 @@ file_hash() {
 }
 
 need curl
-need tar
 
 asset=$(asset_name)
 work=$(mktemp -d)
@@ -58,6 +58,17 @@ expected=$(grep " \*\{0,1\}$asset\$" "$work/SHA256SUMS.txt" | cut -d ' ' -f 1 | 
 actual=$(file_hash "$work/$asset")
 [ "$expected" = "$actual" ] || fail "checksum mismatch for $asset (expected $expected, got $actual)"
 
-tar -xzf "$work/$asset" -C "$work" oh-snap || fail "could not unpack $asset"
-chmod +x "$work/oh-snap"
-"$work/oh-snap" install
+case "$asset" in
+    *.zip)
+        # ditto keeps the app's signature and bundle layout intact.
+        ditto -x -k "$work/$asset" "$work" || fail "could not unpack $asset"
+        program="$work/oh-snap.app/Contents/MacOS/oh-snap"
+        ;;
+    *)
+        need tar
+        tar -xzf "$work/$asset" -C "$work" oh-snap || fail "could not unpack $asset"
+        program="$work/oh-snap"
+        ;;
+esac
+chmod +x "$program"
+"$program" install

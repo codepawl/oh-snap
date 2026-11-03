@@ -109,12 +109,33 @@ jobs:
           $log = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'oh-snap/oh-snap.log'
           if (-not (Select-String -Path $log -Pattern 'crash in .*exception' -Quiet)) { throw "the crash left no line in the log" }
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oh-snap-windows
+          path: target/release/oh-snap.exe
+          if-no-files-found: error
+
+  release:
+    # One release with every OS's file and one SHA256SUMS.txt that lists them all.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          Copy-Item target/release/oh-snap.exe oh-snap.exe
-          $hash = (Get-FileHash oh-snap.exe -Algorithm SHA256).Hash
-          "$hash  oh-snap.exe" | Set-Content SHA256SUMS.txt
-          gh release create $env:GITHUB_REF_NAME oh-snap.exe SHA256SUMS.txt assets/oh-snap.png --title "oh-snap $env:GITHUB_REF_NAME" --generate-notes
+          mkdir dist
+          cp artifacts/oh-snap-windows/oh-snap.exe dist/
+          cp artifacts/oh-snap-macos/oh-snap-macos.zip dist/
+          cp artifacts/oh-snap-linux-x86_64/oh-snap-linux-x86_64.tar.gz dist/
+          cp artifacts/oh-snap-linux-aarch64/oh-snap-linux-aarch64.tar.gz dist/
+          (cd dist && sha256sum oh-snap.exe oh-snap-macos.zip oh-snap-linux-x86_64.tar.gz oh-snap-linux-aarch64.tar.gz > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" dist/* assets/oh-snap.png --title "oh-snap $GITHUB_REF_NAME" --generate-notes
