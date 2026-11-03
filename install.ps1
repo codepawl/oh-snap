@@ -23,6 +23,8 @@ if (-not $expected -or $expected -ne $actual) {
 # WaitForExit waits for `install` alone: `Start-Process -Wait` would also wait for the tray
 # process that `install` starts, which keeps running, so the script would never return.
 $run = Start-Process $download -ArgumentList 'install' -PassThru -NoNewWindow
+# Windows PowerShell 5.1 leaves ExitCode empty unless the handle was read before the exit.
+$null = $run.Handle
 $run.WaitForExit()
 Remove-Item $download
 if ($run.ExitCode -ne 0) {
