@@ -5,9 +5,11 @@
 pub mod canvas;
 pub mod card;
 pub mod geometry;
+pub mod markup;
 pub mod overlay;
 pub mod recording_bar;
 pub mod text;
+pub mod trim;
 pub mod theme;
 
 #[cfg(any(test, windows))]
