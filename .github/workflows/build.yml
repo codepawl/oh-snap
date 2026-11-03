@@ -29,6 +29,37 @@ jobs:
       - name: Smoke test
         run: ./target/release/oh-snap --version
 
+  macos:
+    # The universal app, ad-hoc signed. Developer ID signing and notarization happen outside CI.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add both Mac targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Build both architectures
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Assemble, sign and zip the app
+        run: |
+          bash packaging/macos/make-app.sh \
+            target/aarch64-apple-darwin/release/oh-snap \
+            target/x86_64-apple-darwin/release/oh-snap \
+            dist
+
+      - name: Upload the app
+        uses: actions/upload-artifact@v4
+        with:
+          name: oh-snap-macos
+          path: dist/oh-snap-macos.zip
+          if-no-files-found: error
+
   windows:
     runs-on: windows-latest
     steps:

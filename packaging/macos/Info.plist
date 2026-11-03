@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.codepawl.oh-snap</string>
+	<key>CFBundleName</key>
+	<string>oh-snap</string>
+	<key>CFBundleDisplayName</key>
+	<string>oh-snap</string>
+	<key>CFBundleExecutable</key>
+	<string>oh-snap</string>
+	<key>CFBundleIconFile</key>
+	<string>oh-snap</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@BUILD@</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>oh-snap captures the screen to take screenshots and record video.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>oh-snap records your microphone when you turn it on for a screen recording.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>MIT License, codepawl</string>
+</dict>
+</plist>
