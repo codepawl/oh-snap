@@ -75,6 +75,15 @@ pub trait Platform: Send + Sync {
     /// Sets up start at sign-in and the shortcuts; returns what it did, as text to print.
     fn install(&self) -> Result<String, String>;
     fn uninstall(&self) -> Result<String, String>;
+    /// Makes a GIF next to a recording and returns its path.
+    fn make_gif(&self, recording: &Path) -> Result<PathBuf, String>;
+    /// Saves the part of a recording from `from` to `to` seconds as a new file next to it.
+    fn trim(&self, recording: &Path, from: f64, to: f64) -> Result<PathBuf, String>;
+    /// Replaces the installed program with the release asset in `archive`, already
+    /// checked against SHA256SUMS. The running process keeps going until it restarts.
+    fn install_update(&self, archive: &[u8]) -> Result<(), String>;
+    /// The release asset name for this OS and CPU, as in SHA256SUMS.txt.
+    fn release_asset(&self) -> &'static str;
     /// Opens the file in the default app.
     fn open(&self, path: &Path);
     /// Shows the file in the file manager.

@@ -1,6 +1,6 @@
 //! The macOS implementation of `Platform`. Every method answers "not yet" until it is built.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::desktop::platform::{Platform, RecordOptions, Recording, Screen, Trigger, WindowInfo};
 use crate::output::Image;
@@ -49,6 +49,22 @@ impl Platform for MacPlatform {
 
     fn uninstall(&self) -> Result<String, String> {
         Err(NOT_YET.into())
+    }
+
+    fn make_gif(&self, _recording: &Path) -> Result<PathBuf, String> {
+        Err(NOT_YET.into())
+    }
+
+    fn trim(&self, _recording: &Path, _from: f64, _to: f64) -> Result<PathBuf, String> {
+        Err(NOT_YET.into())
+    }
+
+    fn install_update(&self, _archive: &[u8]) -> Result<(), String> {
+        Err(NOT_YET.into())
+    }
+
+    fn release_asset(&self) -> &'static str {
+        "not-yet"
     }
 
     fn open(&self, _path: &Path) {}
