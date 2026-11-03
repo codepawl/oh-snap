@@ -10,25 +10,6 @@ permissions:
   contents: write
 
 jobs:
-  desktop:
-    # macOS builds and tests only; its release asset comes later. Linux has its own job below.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build
-        run: cargo build --release --locked
-
-      - name: Test
-        run: cargo test --release --locked
-
-      - name: Smoke test
-        run: ./target/release/oh-snap --version
-
   linux:
     strategy:
       fail-fast: false
@@ -68,6 +49,37 @@ jobs:
           path: |
             oh-snap-linux-${{ matrix.arch }}.tar.gz
             oh-snap-linux-${{ matrix.arch }}.sha256
+
+  macos:
+    # The universal app, ad-hoc signed. Developer ID signing and notarization happen outside CI.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add both Mac targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Build both architectures
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Assemble, sign and zip the app
+        run: |
+          bash packaging/macos/make-app.sh \
+            target/aarch64-apple-darwin/release/oh-snap \
+            target/x86_64-apple-darwin/release/oh-snap \
+            dist
+
+      - name: Upload the app
+        uses: actions/upload-artifact@v4
+        with:
+          name: oh-snap-macos
+          path: dist/oh-snap-macos.zip
+          if-no-files-found: error
 
   windows:
     runs-on: windows-latest
