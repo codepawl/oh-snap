@@ -1,9 +1,9 @@
-//! Everything a user can change, kept in %APPDATA%\oh-snap\settings.toml as
+//! Everything a user can change, kept in settings.toml in the config folder as
 //! `key = value` lines. Unknown or broken lines fall back to the defaults.
 
 use std::path::PathBuf;
 
-use crate::overlay::Mode;
+use crate::mode::Mode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParticleMode {
@@ -44,7 +44,7 @@ pub struct Settings {
     // After capture
     pub copy_to_clipboard: bool,
     pub save_to_folder: bool,
-    /// None means Pictures\Screenshots.
+    /// None means the screenshots folder.
     pub save_folder: Option<PathBuf>,
     pub file_format: FileFormat,
     pub show_card: bool,
@@ -107,8 +107,7 @@ impl Settings {
 }
 
 fn settings_path() -> PathBuf {
-    let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
-    PathBuf::from(base).join("oh-snap").join("settings.toml")
+    crate::folders::config_folder().join("settings.toml")
 }
 
 pub fn load() -> Settings {
@@ -200,12 +199,7 @@ fn apply(settings: &mut Settings, key: &str, value: &str) {
 }
 
 pub fn mode_name(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Region => "region",
-        Mode::Window => "window",
-        Mode::Screen => "screen",
-        Mode::Freeform => "freeform",
-    }
+    mode.name()
 }
 
 pub fn save(settings: &Settings) {
@@ -272,11 +266,18 @@ pub fn save(settings: &Settings) {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    const CONFIG_VARIABLE: &str = "APPDATA";
+    #[cfg(target_os = "macos")]
+    const CONFIG_VARIABLE: &str = "HOME";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    const CONFIG_VARIABLE: &str = "XDG_CONFIG_HOME";
+
     #[test]
     fn every_setting_survives_save_and_load() {
         let folder = std::env::temp_dir().join(format!("oh-snap-settings-test-{}", std::process::id()));
-        // SAFETY: the only test that touches APPDATA, before any thread reads it.
-        unsafe { std::env::set_var("APPDATA", &folder) };
+        // SAFETY: the only test that touches the config folder variable, before any thread reads it.
+        unsafe { std::env::set_var(CONFIG_VARIABLE, &folder) };
         let changed = Settings {
             default_mode: Mode::Window,
             delay_seconds: 5,

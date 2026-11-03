@@ -1,8 +1,8 @@
 [package]
 name = "oh-snap"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
-description = "A fast screen snipping tool for Windows"
+description = "A fast screen snipping tool for Windows, macOS and Linux"
 license = "MIT"
 repository = "https://github.com/codepawl/oh-snap"
 
@@ -11,9 +11,11 @@ gif = "0.14"
 rqrr = "0.11"
 jpeg-encoder = "0.7"
 png = "0.18"
+
+[target.'cfg(windows)'.dependencies]
 windows-numerics = "0.3"
 
-[dependencies.windows]
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
 features = [
     "Foundation_Collections",
@@ -69,3 +71,45 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[target.'cfg(not(windows))'.dependencies]
+libc = "0.2"
+winit = "0.30"
+softbuffer = "0.4"
+tiny-skia = "0.12"
+fontdue = "0.9"
+sha2 = "0.10"
+
+# Linux only. Pure-Rust crates, so the binary needs no system library at run time.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.14", features = ["randr"] }
+# async-io instead of the default tokio: zbus then runs on a small executor.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "screenshot", "global_shortcuts"] }
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
+futures-lite = "2"
+wl-clipboard-rs = "0.9"
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+dispatch2 = "0.3"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-core-media = "0.3"
+objc2-av-foundation = { version = "0.3", features = ["block2", "objc2-core-media", "objc2-core-graphics", "objc2-core-foundation"] }
+objc2-screen-capture-kit = "0.3"
+objc2-vision = "0.3"
+objc2-image-io = "0.3"
+global-hotkey = "0.9"
+tray-icon = "0.26"
+
+# `desktop::ui` and `desktop::update` also build in Windows tests, so the drawing and the
+# checksum code run on the machine the app is written on.
+[target.'cfg(windows)'.dev-dependencies]
+tiny-skia = "0.12"
+fontdue = "0.9"
+sha2 = "0.10"

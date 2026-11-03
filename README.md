@@ -2,11 +2,13 @@
 
 # oh-snap
 
-A fast screen snipping tool for Windows, written in Rust. It replaces Snipping Tool for PrtSc, Win+Shift+S and `ms-screenclip:` links. The program is one file of about 1.3 MB.
+A fast screen snipping tool for Windows, macOS and Linux, written in Rust. On Windows it replaces Snipping Tool for PrtSc, Win+Shift+S and `ms-screenclip:` links. The program is one file of about 1.3 MB.
 
 ![The oh-snap overlay over a desktop](docs/overlay.png)
 
 ## Install
+
+### Windows
 
 Run this line in PowerShell. You do not need admin rights.
 
@@ -23,7 +25,20 @@ cargo install --git https://github.com/codepawl/oh-snap
 oh-snap install
 ```
 
-oh-snap runs on Windows 10 and 11. macOS and Linux versions are coming.
+oh-snap runs on Windows 10 and 11.
+
+### macOS and Linux
+
+The macOS and Linux versions are new and less tested than the Windows one. Run this line in a terminal:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/codepawl/oh-snap/main/install.sh | sh
+```
+
+The script downloads the release for your system, checks it against `SHA256SUMS.txt` and runs `oh-snap install`. To undo the install, run `oh-snap uninstall`.
+
+- **macOS** 14 or later, Apple silicon or Intel. `install` copies oh-snap to `~/Applications` and starts it at sign-in. It turns off the macOS screenshot shortcuts, so Cmd+Shift+3, 4 and 5 open oh-snap. The first snip asks for the Screen Recording permission. Recording needs macOS 15.
+- **Linux** on X11 or Wayland, x86_64 or arm64. `install` copies oh-snap to `~/.local/bin` and starts it at sign-in. On X11 it takes Print, Shift+Print and Ctrl+Print. On Wayland the desktop's portal must allow the shortcuts. On GNOME, `install` binds Print to oh-snap for you. Text reading needs `tesseract`, and recording, GIFs and trim need `ffmpeg`. On Wayland, recording needs `wf-recorder`.
 
 ## Use
 
@@ -170,6 +185,8 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 
 ## How it works
 
+On Windows:
+
 - `capture.rs` keeps one DXGI Desktop Duplication for each monitor. It keeps the latest frame in video memory, so a snip reads back only once.
 - `overlay.rs` draws the frozen desktop with Direct2D at 1 unit for 1 physical pixel. The process is per-monitor DPI aware, so mixed-DPI setups line up.
 - `daemon.rs` uses a low-level keyboard hook to get Win+Shift+S and PrtSc before Explorer does. Win+PrtSc and Alt+PrtSc stay with Windows.
@@ -182,6 +199,12 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 - `crash.rs` writes a line to `%LOCALAPPDATA%\oh-snap\oh-snap.log` when the program dies, with the module and offset, so a bug report can say where.
 - `install.rs` writes only to `HKCU` and keeps the old PrtSc setting, so `uninstall` can restore it.
 
+On macOS and Linux, `src/desktop` is one app for both:
+
+- The overlay, the card and the recording bar draw with tiny-skia into a winit window, in JetBrains Mono. The same drawing code runs in the Windows tests, so the look is checked on every build.
+- `platform.rs` is the line between the app and the system. `macos/` uses ScreenCaptureKit, Vision for text, and AVFoundation for recordings, GIFs and trim. `linux/` uses X11 or the xdg-desktop-portal, and builds from pure-Rust crates only, so it needs no system library to start.
+- Updates download through the system's `curl`, so TLS is the system's own and the program carries no TLS code.
+
 ## Known limits
 
 - The tray process keeps its capture device open so the overlay is fast. Thirty seconds after the last snip it gives its memory back to Windows: Task Manager shows about 0.3 MB while it waits. The first snip after that takes about 20 ms longer.
@@ -189,11 +212,13 @@ On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that wo
 - Windows does not let a normal process get keys while an elevated window has focus. In that case, use the tray icon.
 - Protected video (DRM) shows as black, and the UAC prompt cannot be captured.
 - Rotated monitors and HDR monitors are not tested yet.
+- On Wayland, apps cannot see other windows, so the window mode works on X11 only.
+- The macOS app is not notarized yet. The install script works, but Gatekeeper blocks a zip that you download with a browser.
 
 ## Next
 
 - Add-ons that run after every snip, not only from the editor.
-- macOS and Linux versions, which are coming.
+- Live video frames in the macOS and Linux trim window.
 
 ## License
 

@@ -1,0 +1,19 @@
+[Desktop Entry]
+Type=Application
+Name=oh-snap
+GenericName=Screenshot tool
+Comment=Fast screen snipping tool
+Exec=oh-snap capture region
+Icon=oh-snap
+Terminal=false
+Categories=Utility;Graphics;
+Keywords=screenshot;snip;capture;record;
+Actions=Screen;Window;
+
+[Desktop Action Screen]
+Name=Capture screen
+Exec=oh-snap capture screen
+
+[Desktop Action Window]
+Name=Capture window
+Exec=oh-snap capture window

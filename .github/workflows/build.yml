@@ -10,6 +10,77 @@ permissions:
   contents: write
 
 jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Smoke test under Xvfb
+        # The capture must write a PNG as large as the virtual screen.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          ./target/release/oh-snap --version
+          xvfb-run -a -s "-screen 0 1280x720x24" ./target/release/oh-snap capture screen --out shot.png
+          python3 -c "import struct; head = open('shot.png', 'rb').read(24); assert head[1:4] == b'PNG', 'not a PNG'; size = struct.unpack('>II', head[16:24]); assert size == (1280, 720), size"
+
+      - name: Package
+        run: |
+          tar -czf oh-snap-linux-${{ matrix.arch }}.tar.gz -C target/release oh-snap
+          sha256sum oh-snap-linux-${{ matrix.arch }}.tar.gz | tee oh-snap-linux-${{ matrix.arch }}.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oh-snap-linux-${{ matrix.arch }}
+          path: |
+            oh-snap-linux-${{ matrix.arch }}.tar.gz
+            oh-snap-linux-${{ matrix.arch }}.sha256
+
+  macos:
+    # The universal app, ad-hoc signed. Developer ID signing and notarization happen outside CI.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add both Mac targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Build both architectures
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Assemble, sign and zip the app
+        run: |
+          bash packaging/macos/make-app.sh \
+            target/aarch64-apple-darwin/release/oh-snap \
+            target/x86_64-apple-darwin/release/oh-snap \
+            dist
+
+      - name: Upload the app
+        uses: actions/upload-artifact@v4
+        with:
+          name: oh-snap-macos
+          path: dist/oh-snap-macos.zip
+          if-no-files-found: error
+
   windows:
     runs-on: windows-latest
     steps:
@@ -38,12 +109,33 @@ jobs:
           $log = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'oh-snap/oh-snap.log'
           if (-not (Select-String -Path $log -Pattern 'crash in .*exception' -Quiet)) { throw "the crash left no line in the log" }
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oh-snap-windows
+          path: target/release/oh-snap.exe
+          if-no-files-found: error
+
+  release:
+    # One release with every OS's file and one SHA256SUMS.txt that lists them all.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          Copy-Item target/release/oh-snap.exe oh-snap.exe
-          $hash = (Get-FileHash oh-snap.exe -Algorithm SHA256).Hash
-          "$hash  oh-snap.exe" | Set-Content SHA256SUMS.txt
-          gh release create $env:GITHUB_REF_NAME oh-snap.exe SHA256SUMS.txt assets/oh-snap.png --title "oh-snap $env:GITHUB_REF_NAME" --generate-notes
+          mkdir dist
+          cp artifacts/oh-snap-windows/oh-snap.exe dist/
+          cp artifacts/oh-snap-macos/oh-snap-macos.zip dist/
+          cp artifacts/oh-snap-linux-x86_64/oh-snap-linux-x86_64.tar.gz dist/
+          cp artifacts/oh-snap-linux-aarch64/oh-snap-linux-aarch64.tar.gz dist/
+          (cd dist && sha256sum oh-snap.exe oh-snap-macos.zip oh-snap-linux-x86_64.tar.gz oh-snap-linux-aarch64.tar.gz > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" dist/* assets/oh-snap.png --title "oh-snap $GITHUB_REF_NAME" --generate-notes
