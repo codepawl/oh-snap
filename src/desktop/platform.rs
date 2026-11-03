@@ -69,8 +69,9 @@ pub trait Platform: Send + Sync {
         options: RecordOptions,
         output: &Path,
     ) -> Result<Box<dyn Recording>, String>;
-    /// Registers hotkeys, the tray icon and the local socket, calls `send` for each
-    /// trigger, and blocks until `Trigger::Quit` has been sent.
+    /// Registers the hotkeys and the tray icon and returns at once; called once from the main
+    /// thread inside the running event loop, which keeps the process alive. `send` gets each
+    /// trigger. The command socket lives in `desktop::socket`, not here.
     fn listen(&self, send: Box<dyn Fn(Trigger) + Send + Sync>) -> Result<(), String>;
     /// Sets up start at sign-in and the shortcuts; returns what it did, as text to print.
     fn install(&self) -> Result<String, String>;

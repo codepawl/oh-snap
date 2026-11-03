@@ -89,8 +89,9 @@ mod updater;
 mod windows_main;
 
 // macOS and Linux.
-#[cfg(not(windows))]
-#[allow(dead_code)] // the seam has no caller until the UI port
+// Built for real off Windows; on Windows only in tests, so the shared window drawing runs there.
+#[cfg(any(test, not(windows)))]
+#[cfg_attr(windows, allow(dead_code))]
 mod desktop;
 
 fn main() {

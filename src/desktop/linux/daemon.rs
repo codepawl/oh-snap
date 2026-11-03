@@ -1,17 +1,12 @@
-//! What runs while the tray process lives: the command socket, the tray icon and the hotkeys.
-//! `start` returns at once; every piece has its own thread.
+//! What runs while the tray process lives: the tray icon and the hotkeys. The command socket
+//! is `desktop::socket`, shared with macOS. `start` returns at once; each piece has its own thread.
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use ksni::blocking::TrayMethods;
 use ksni::menu::{MenuItem, StandardItem, SubMenu};
 
-use super::logic::command::{self, Command};
 use super::logic::session::Session;
 use super::{wayland, xorg};
 use crate::desktop::platform::Trigger;
@@ -19,93 +14,9 @@ use crate::mode::Mode;
 
 type Sender = Arc<dyn Fn(Trigger) + Send + Sync>;
 
-pub fn socket_file() -> PathBuf {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
-    // SAFETY: getuid has no arguments and cannot fail.
-    let user_id = unsafe { libc::getuid() };
-    command::socket_path(runtime_dir.as_deref(), user_id)
-}
-
-/// Sends one command line to the running daemon.
-pub fn send_command(line: &str) -> Result<(), String> {
-    let mut stream = UnixStream::connect(socket_file()).map_err(|_| "oh-snap is not running".to_string())?;
-    stream.set_read_timeout(Some(Duration::from_secs(3))).map_err(|error| error.to_string())?;
-    stream.write_all(format!("{line}\n").as_bytes()).map_err(|error| error.to_string())?;
-    let mut reply = String::new();
-    let _ = stream.read_to_string(&mut reply);
-    if reply.starts_with("ok") { Ok(()) } else { Err(format!("oh-snap did not understand `{line}`")) }
-}
-
-pub fn is_running() -> bool {
-    UnixStream::connect(socket_file()).is_ok()
-}
-
-fn trigger_for(command: Command) -> Option<Trigger> {
-    Some(match command {
-        Command::Snip(word) => Trigger::Snip(Mode::parse(&word)?),
-        Command::LastRegion => Trigger::LastRegion,
-        Command::Record => Trigger::Record,
-        Command::Quit => Trigger::Quit,
-        Command::OpenSettings => Trigger::OpenSettings,
-        Command::OpenFolder => Trigger::OpenFolder,
-        Command::Recent(path) => Trigger::Recent(path),
-        Command::CheckUpdate => Trigger::CheckUpdate,
-    })
-}
-
-fn bind_socket() -> Result<UnixListener, String> {
-    let path = socket_file();
-    let listener = match UnixListener::bind(&path) {
-        Ok(listener) => listener,
-        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-            if is_running() {
-                return Err("oh-snap is already running".into());
-            }
-            // A crashed run left its socket file behind.
-            let _ = std::fs::remove_file(&path);
-            UnixListener::bind(&path).map_err(|error| format!("cannot open {}: {error}", path.display()))?
-        }
-        Err(error) => return Err(format!("cannot open {}: {error}", path.display())),
-    };
-    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    Ok(listener)
-}
-
-fn serve_socket(listener: UnixListener, send: Sender) {
-    for stream in listener.incoming().flatten() {
-        let mut line = String::new();
-        let mut reader = BufReader::new(stream.try_clone().expect("a socket can be cloned")).take(4096);
-        if reader.read_line(&mut line).is_err() {
-            continue;
-        }
-        let trigger = command::parse(&line).and_then(trigger_for);
-        let mut stream = stream;
-        match trigger {
-            Some(trigger) => {
-                let _ = stream.write_all(b"ok\n");
-                send(trigger);
-            }
-            None => {
-                let _ = stream.write_all(b"error\n");
-            }
-        }
-    }
-}
-
-/// Starts the socket, the tray and the hotkeys, and returns. Only a socket that cannot be opened
-/// (usually: another oh-snap runs) is an error; a missing tray or hotkey is logged.
+/// Starts the tray and the hotkeys, and returns. A missing tray or hotkey is logged, not an error.
 pub fn start(session: Session, send: Box<dyn Fn(Trigger) + Send + Sync>) -> Result<(), String> {
-    let listener = bind_socket()?;
-    let inner: Sender = Arc::from(send);
-    let send: Sender = Arc::new(move |trigger| {
-        if trigger == Trigger::Quit {
-            let _ = std::fs::remove_file(socket_file());
-        }
-        inner(trigger);
-    });
-
-    let socket_send = send.clone();
-    std::thread::spawn(move || serve_socket(listener, socket_send));
+    let send: Sender = Arc::from(send);
 
     let tray_send = send.clone();
     std::thread::spawn(move || run_tray(tray_send));

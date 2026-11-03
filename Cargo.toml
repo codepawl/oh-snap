@@ -78,6 +78,7 @@ winit = "0.30"
 softbuffer = "0.4"
 tiny-skia = "0.12"
 fontdue = "0.9"
+sha2 = "0.10"
 
 # Linux only. Pure-Rust crates, so the binary needs no system library at run time.
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -105,3 +106,10 @@ objc2-vision = "0.3"
 objc2-image-io = "0.3"
 global-hotkey = "0.9"
 tray-icon = "0.26"
+
+# `desktop::ui` and `desktop::update` also build in Windows tests, so the drawing and the
+# checksum code run on the machine the app is written on.
+[target.'cfg(windows)'.dev-dependencies]
+tiny-skia = "0.12"
+fontdue = "0.9"
+sha2 = "0.10"

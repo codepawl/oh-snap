@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 use super::logic::install::{self as texts, SavedSetting};
 use super::logic::{update, uri};
-use super::{daemon, display_error};
+use super::display_error;
 
 struct Folders {
     binary: PathBuf,
@@ -154,7 +154,7 @@ pub fn install() -> Result<String, String> {
     } else {
         report.push(format!("bind Print to `{program} capture region` in your desktop's keyboard settings if oh-snap does not get it"));
     }
-    if !daemon::is_running() {
+    if !crate::desktop::socket::daemon_is_running() {
         let started = Command::new(&folders.binary)
             .arg("daemon")
             .stdin(Stdio::null())
@@ -177,7 +177,7 @@ fn path_has(folder: &Path) -> bool {
 pub fn uninstall() -> Result<String, String> {
     let folders = folders()?;
     let mut report = Vec::new();
-    let _ = daemon::send_command("quit");
+    let _ = crate::desktop::socket::send("quit");
     if texts::is_gnome(&desktop_name()) || folders.state.exists() {
         restore_gnome_keys(&folders, &mut report);
     }

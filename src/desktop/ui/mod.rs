@@ -1,2 +1,14 @@
-//! The overlay, card and pin windows (winit, softbuffer, tiny-skia). Filled in by the UI
-//! port; nothing here yet.
+//! The windows of the shared app, drawn into `tiny_skia::Pixmap`s by plain functions so the
+//! layout, hit-testing and look can be tested (and written out as PNGs) on any OS. The
+//! winit shell in `desktop::app` only feeds these functions events and blits the pixmaps.
+
+pub mod canvas;
+pub mod card;
+pub mod geometry;
+pub mod overlay;
+pub mod recording_bar;
+pub mod text;
+pub mod theme;
+
+#[cfg(any(test, windows))]
+pub mod testing;

@@ -37,16 +37,6 @@ impl LinuxPlatform {
         .ok_or_else(|| "no graphical session: neither WAYLAND_DISPLAY nor DISPLAY is set".to_string())
     }
 
-    /// Sends a command line such as `capture region` to the running daemon. The `capture` command of
-    /// a second process uses this so one tray process does the snipping.
-    pub fn send_to_daemon(&self, line: &str) -> Result<(), String> {
-        daemon::send_command(line)
-    }
-
-    pub fn daemon_running(&self) -> bool {
-        daemon::is_running()
-    }
-
     /// On Wayland, falls back to the X clipboard through XWayland (GNOME syncs it to Wayland apps).
     fn copy(&self, payload: Payload) -> Result<(), String> {
         let x11_available = std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty());
