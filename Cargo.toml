@@ -78,3 +78,14 @@ winit = "0.30"
 softbuffer = "0.4"
 tiny-skia = "0.12"
 fontdue = "0.9"
+
+# Linux only. Pure-Rust crates, so the binary needs no system library at run time.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.14", features = ["randr"] }
+# async-io instead of the default tokio: zbus then runs on a small executor.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "screenshot", "global_shortcuts"] }
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
+futures-lite = "2"
+wl-clipboard-rs = "0.9"
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
