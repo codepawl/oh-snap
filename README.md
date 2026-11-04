@@ -213,7 +213,6 @@ On macOS and Linux, `src/desktop` is one app for both:
 - Protected video (DRM) shows as black, and the UAC prompt cannot be captured.
 - Rotated monitors and HDR monitors are not tested yet.
 - On Wayland, apps cannot see other windows, so the window mode works on X11 only.
-- The macOS app is not notarized yet. The install script works, but Gatekeeper blocks a zip that you download with a browser.
 
 ## Next
 
