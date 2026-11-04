@@ -4,3 +4,4 @@
 *.pem
 *.key
 *.pfx
+/dist
