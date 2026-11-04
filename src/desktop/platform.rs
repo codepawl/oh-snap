@@ -22,7 +22,6 @@ pub struct WindowInfo {
     pub y: i32,
     pub width: u32,
     pub height: u32,
-    pub title: String,
 }
 
 /// What the hotkeys, the tray menu and the local socket ask the app to do.
@@ -43,6 +42,16 @@ pub struct RecordOptions {
     pub frames_per_second: u32,
     pub system_sound: bool,
     pub microphone: bool,
+}
+
+/// What setting up from the app did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetUp {
+    /// This process is the installed app and keeps running.
+    Done,
+    /// The app was copied to its place; this process must quit so the copy can start.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Restart,
 }
 
 /// A recording in progress.
@@ -76,6 +85,15 @@ pub trait Platform: Send + Sync {
     /// Sets up start at sign-in and the shortcuts; returns what it did, as text to print.
     fn install(&self) -> Result<String, String>;
     fn uninstall(&self) -> Result<String, String>;
+    /// When `install` has not run yet: one line on what it would do, for the setup card that a
+    /// plain start (opening the app by hand) shows. `None` means nothing to offer.
+    fn setup_offer(&self) -> Option<&'static str> {
+        None
+    }
+    /// `install`, started from the setup card.
+    fn set_up(&self) -> Result<SetUp, String> {
+        self.install().map(|_| SetUp::Done)
+    }
     /// Makes a GIF next to a recording and returns its path.
     fn make_gif(&self, recording: &Path) -> Result<PathBuf, String>;
     /// Saves the part of a recording from `from` to `to` seconds as a new file next to it.

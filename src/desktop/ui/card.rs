@@ -21,6 +21,8 @@ pub enum CardAction {
     Copy,
     Gif,
     Trim,
+    SetUp,
+    NotNow,
 }
 
 impl CardAction {
@@ -31,6 +33,8 @@ impl CardAction {
             CardAction::Copy => "copy",
             CardAction::Gif => "gif",
             CardAction::Trim => "trim",
+            CardAction::SetUp => "set up",
+            CardAction::NotNow => "not now",
         }
     }
 }
@@ -210,5 +214,28 @@ mod tests {
         let mut pixmap = Pixmap::new(layout.width, layout.height).unwrap();
         render(&color, &layout, None, &fonts, &mut pixmap);
         testing::write_preview("card-color", &pixmap);
+    }
+
+    #[test]
+    fn the_setup_card_fits_its_text_and_buttons() {
+        let fonts = Fonts::load();
+        let model = CardModel {
+            headline: "set up oh-snap?".into(),
+            detail: "run at login, take Cmd+Shift+3/4/5".into(),
+            thumbnail: None,
+            swatch: None,
+            actions: vec![CardAction::SetUp, CardAction::NotNow],
+            remaining: 1.0,
+            failed: false,
+        };
+        let layout = CardLayout::new(&model, &fonts, 2.0);
+        let detail_at = layout.detail_at.expect("a detail line");
+        assert!(detail_at.0 + fonts.width(&model.detail, theme::LABEL_SIZE * 2.0) <= layout.width as f32);
+        let (action, rect) = layout.buttons[0];
+        assert_eq!(action, CardAction::SetUp);
+        assert_eq!(layout.action_at(rect.x + 3.0, rect.y + 3.0), Some(CardAction::SetUp));
+        let mut pixmap = Pixmap::new(layout.width, layout.height).unwrap();
+        render(&model, &layout, Some(CardAction::SetUp), &fonts, &mut pixmap);
+        testing::write_preview("card-setup", &pixmap);
     }
 }

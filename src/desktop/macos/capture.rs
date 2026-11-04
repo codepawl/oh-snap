@@ -106,12 +106,6 @@ fn dictionary_number(dictionary: &NSDictionary<NSString, AnyObject>, key: &str) 
     Some(number.doubleValue())
 }
 
-fn dictionary_text(dictionary: &NSDictionary<NSString, AnyObject>, key: &str) -> Option<String> {
-    let value = dictionary.objectForKey(&NSString::from_str(key))?;
-    let text = value.downcast_ref::<NSString>()?;
-    Some(text.to_string())
-}
-
 fn window_info(entry: &NSDictionary<NSString, AnyObject>, own_process: f64, desktop_scale: f64) -> Option<WindowInfo> {
     if dictionary_number(entry, "kCGWindowLayer")? != 0.0 {
         return None;
@@ -135,12 +129,7 @@ fn window_info(entry: &NSDictionary<NSString, AnyObject>, own_process: f64, desk
     if pixels.width < 2 || pixels.height < 2 {
         return None;
     }
-    // Window names need the screen recording permission; the owner's name is the fallback.
-    let title = dictionary_text(entry, "kCGWindowName")
-        .filter(|name| !name.is_empty())
-        .or_else(|| dictionary_text(entry, "kCGWindowOwnerName"))
-        .unwrap_or_default();
-    Some(WindowInfo { x: pixels.x, y: pixels.y, width: pixels.width, height: pixels.height, title })
+    Some(WindowInfo { x: pixels.x, y: pixels.y, width: pixels.width, height: pixels.height })
 }
 
 /// The largest backing scale among the attached displays, the same one `capture_screens` uses.

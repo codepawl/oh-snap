@@ -95,8 +95,6 @@ pub fn capture_screens() -> Result<Vec<Screen>, String> {
 struct WindowAtoms {
     stacking: Atom,
     frame_extents: Atom,
-    name: Atom,
-    utf8: Atom,
     state: Atom,
     hidden: Atom,
 }
@@ -105,8 +103,6 @@ fn window_atoms(connection: &RustConnection) -> Result<WindowAtoms, String> {
     Ok(WindowAtoms {
         stacking: atom(connection, "_NET_CLIENT_LIST_STACKING")?,
         frame_extents: atom(connection, "_NET_FRAME_EXTENTS")?,
-        name: atom(connection, "_NET_WM_NAME")?,
-        utf8: atom(connection, "UTF8_STRING")?,
         state: atom(connection, "_NET_WM_STATE")?,
         hidden: atom(connection, "_NET_WM_STATE_HIDDEN")?,
     })
@@ -138,13 +134,7 @@ fn describe_window(connection: &RustConnection, root: Window, atoms: &WindowAtom
     if width == 0 || height == 0 {
         return None;
     }
-    let title = connection
-        .get_property(false, window, atoms.name, atoms.utf8, 0, 1024)
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .map(|reply| String::from_utf8_lossy(&reply.value).into_owned())
-        .unwrap_or_default();
-    Some(WindowInfo { x, y, width, height, title })
+    Some(WindowInfo { x, y, width, height })
 }
 
 /// Visible top-level windows from the window manager's stacking list, front to back.
