@@ -41,8 +41,8 @@ pub fn two_screens() -> Vec<Screen> {
 
 pub fn sample_windows() -> Vec<WindowInfo> {
     vec![
-        WindowInfo { x: 300, y: 200, width: 320, height: 220, title: "front".into() },
-        WindowInfo { x: 60, y: 80, width: 360, height: 260, title: "back".into() },
+        WindowInfo { x: 300, y: 200, width: 320, height: 220 },
+        WindowInfo { x: 60, y: 80, width: 360, height: 260 },
     ]
 }
 

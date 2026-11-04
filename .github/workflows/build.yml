@@ -100,7 +100,7 @@ jobs:
             } >> "$GITHUB_ENV"
           fi
 
-      - name: Assemble, sign and zip the app
+      - name: Assemble, sign and package the app
         run: |
           bash packaging/macos/make-app.sh \
             target/aarch64-apple-darwin/release/oh-snap \
@@ -111,7 +111,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: oh-snap-macos
-          path: dist/oh-snap-macos.zip
+          path: |
+            dist/oh-snap-macos.zip
+            dist/oh-snap-macos.dmg
           if-no-files-found: error
 
   windows:
@@ -167,8 +169,9 @@ jobs:
           mkdir dist
           cp artifacts/oh-snap-windows/oh-snap.exe dist/
           cp artifacts/oh-snap-macos/oh-snap-macos.zip dist/
+          cp artifacts/oh-snap-macos/oh-snap-macos.dmg dist/
           cp artifacts/oh-snap-linux-x86_64/oh-snap-linux-x86_64.tar.gz dist/
           cp artifacts/oh-snap-linux-aarch64/oh-snap-linux-aarch64.tar.gz dist/
-          (cd dist && sha256sum oh-snap.exe oh-snap-macos.zip oh-snap-linux-x86_64.tar.gz oh-snap-linux-aarch64.tar.gz > SHA256SUMS.txt)
+          (cd dist && sha256sum oh-snap.exe oh-snap-macos.zip oh-snap-macos.dmg oh-snap-linux-x86_64.tar.gz oh-snap-linux-aarch64.tar.gz > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
           gh release create "$GITHUB_REF_NAME" dist/* assets/oh-snap.png --title "oh-snap $GITHUB_REF_NAME" --generate-notes

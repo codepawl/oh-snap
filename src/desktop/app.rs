@@ -17,7 +17,7 @@ use winit::keyboard::{Key as LogicalKey, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId, WindowLevel};
 
 use super::finish::{self, Overrides};
-use super::platform::{Platform, RecordOptions, Recording, Screen, Trigger};
+use super::platform::{Platform, RecordOptions, Recording, Screen, SetUp, Trigger};
 use super::socket;
 use super::ui::card::{self, CardAction, CardLayout, CardModel};
 use super::ui::canvas;
@@ -68,6 +68,8 @@ struct CardContent {
     image: Option<Image>,
     /// A recording's length, which the trim window needs.
     recording_length: Option<Duration>,
+    /// Stays until a button is used: no countdown, shown even with cards turned off.
+    persistent: bool,
 }
 
 struct CardState {
@@ -81,6 +83,7 @@ struct CardState {
     shown_for: Duration,
     lifetime: Duration,
     last_tick: Instant,
+    persistent: bool,
 }
 
 struct ActiveRecording {
@@ -124,6 +127,7 @@ struct App {
     recording: Option<ActiveRecording>,
     delayed: Option<(Instant, Trigger)>,
     first: Option<Trigger>,
+    offer_setup: bool,
     started: bool,
     shift: bool,
     /// Ctrl on Linux, Cmd on macOS.
@@ -134,7 +138,7 @@ struct App {
 
 /// Runs the app until `Trigger::Quit`. `first` is a trigger to act on at once; with
 /// `one_shot` the app quits when that is done (the command line without a daemon).
-pub fn run(first: Option<(Trigger, bool)>, overrides: Overrides) -> Result<(), String> {
+pub fn run(first: Option<(Trigger, bool)>, overrides: Overrides, offer_setup: bool) -> Result<(), String> {
     let one_shot = first.as_ref().is_some_and(|(_, one_shot)| *one_shot);
     let mut builder = EventLoop::<UserEvent>::with_user_event();
     #[cfg(target_os = "macos")]
@@ -168,6 +172,7 @@ pub fn run(first: Option<(Trigger, bool)>, overrides: Overrides) -> Result<(), S
         recording: None,
         delayed: None,
         first: first.map(|(trigger, _)| trigger),
+        offer_setup: offer_setup && !one_shot,
         started: false,
         shift: false,
         command: false,
@@ -196,6 +201,9 @@ impl ApplicationHandler<UserEvent> for App {
                 crate::log::write(&format!("listen: {error}"));
                 eprintln!("oh-snap: {error}");
             }
+        }
+        if self.offer_setup {
+            self.offer_setup(event_loop);
         }
         if let Some(trigger) = self.first.take() {
             self.handle_trigger(event_loop, trigger);
@@ -525,9 +533,7 @@ impl App {
             Ok(_) => return self.show_failure(event_loop, "snip failed", "no screen to capture"),
             Err(error) => return self.show_failure(event_loop, "snip failed", &error),
         };
-        if let Some(card) = self.card.take() {
-            self.close_window(card.window);
-        }
+        self.close_card();
         let options = OverlayOptions {
             extra_tools: true,
             snap_to_windows: self.settings.snap_to_windows,
@@ -871,12 +877,10 @@ impl App {
     }
 
     fn show_card(&mut self, event_loop: &ActiveEventLoop, content: CardContent) {
-        if self.one_shot || !self.settings.show_card && !content.failed {
+        if self.one_shot || !self.settings.show_card && !content.failed && !content.persistent {
             return;
         }
-        if let Some(old) = self.card.take() {
-            self.close_window(old.window);
-        }
+        self.close_card();
         let monitor = event_loop.primary_monitor().or_else(|| event_loop.available_monitors().next());
         let scale = monitor.as_ref().map_or(1.0, |monitor| monitor.scale_factor() as f32);
         let model = CardModel {
@@ -916,7 +920,7 @@ impl App {
             return;
         };
         let lifetime = Duration::from_secs(u64::from(self.settings.card_seconds.max(1)));
-        self.card = Some(CardState { window: id, model, layout, path: content.path, image: content.image, recording_length: content.recording_length, hovered: None, shown_for: Duration::ZERO, lifetime, last_tick: Instant::now() });
+        self.card = Some(CardState { window: id, model, layout, path: content.path, image: content.image, recording_length: content.recording_length, hovered: None, shown_for: Duration::ZERO, lifetime, last_tick: Instant::now(), persistent: content.persistent });
     }
 
     fn close_card_if(&mut self, id: WindowId) {
@@ -934,7 +938,7 @@ impl App {
         let delta = now - card.last_tick;
         card.last_tick = now;
         // The countdown waits while the pointer is on a button.
-        if card.hovered.is_none() {
+        if card.hovered.is_none() && !card.persistent {
             card.shown_for += delta;
         }
         card.model.remaining = 1.0 - card.shown_for.as_secs_f32() / card.lifetime.as_secs_f32();
@@ -964,7 +968,57 @@ impl App {
                 Some(length) => self.open_trim(event_loop, path, length),
                 None => self.show_note(event_loop, "cannot trim this", "its length is not known"),
             },
+            (CardAction::SetUp, _) => self.run_setup(event_loop),
+            (CardAction::NotNow, _) => self.decline_setup(),
             _ => {}
+        }
+    }
+
+    // ------------------------------------------------------------ first start
+
+    /// Shows the setup card when the app was opened by hand and is not installed yet.
+    fn offer_setup(&mut self, event_loop: &ActiveEventLoop) {
+        if setup_declined_marker().exists() {
+            return;
+        }
+        let Some(detail) = self.platform.setup_offer() else {
+            return;
+        };
+        let content = CardContent {
+            headline: "set up oh-snap?".into(),
+            detail: detail.into(),
+            actions: vec![CardAction::SetUp, CardAction::NotNow],
+            persistent: true,
+            ..CardContent::default()
+        };
+        self.show_card(event_loop, content);
+    }
+
+    fn run_setup(&mut self, event_loop: &ActiveEventLoop) {
+        self.close_card();
+        match self.platform.set_up() {
+            Ok(SetUp::Done) => self.show_note(event_loop, "oh-snap is set up", "it starts at login now"),
+            Ok(SetUp::Restart) => self.handle_trigger(event_loop, Trigger::Quit),
+            Err(error) => {
+                crate::log::write(&format!("setup: {error}"));
+                self.show_failure(event_loop, "setup failed", &error);
+            }
+        }
+    }
+
+    /// "not now" is remembered, so a later start by hand does not ask again.
+    fn decline_setup(&mut self) {
+        self.close_card();
+        let marker = setup_declined_marker();
+        if let Some(folder) = marker.parent() {
+            let _ = std::fs::create_dir_all(folder);
+        }
+        let _ = std::fs::write(&marker, b"");
+    }
+
+    fn close_card(&mut self) {
+        if let Some(card) = self.card.take() {
+            self.close_window(card.window);
         }
     }
 
@@ -1094,4 +1148,9 @@ impl App {
             let _ = proxy.send_event(UserEvent::Updated(result));
         });
     }
+}
+
+/// Written when "not now" is picked on the setup card.
+fn setup_declined_marker() -> PathBuf {
+    crate::folders::config_folder().join("setup-declined")
 }
