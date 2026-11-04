@@ -1,0 +1,43 @@
+name: Bug report
+description: Something does not work as it should
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: oh-snap version
+      description: The output of `oh-snap --version`
+      placeholder: oh-snap 0.12.1
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS
+        - Linux with X11
+        - Linux with Wayland
+    validations:
+      required: true
+  - type: input
+    id: system-details
+    attributes:
+      label: System details
+      description: Windows build, macOS version, or Linux distribution and desktop
+      placeholder: Windows 11 build 26300, two monitors
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you pressed, what you expected and what you got
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: The last lines of `oh-snap.log`. CONTRIBUTING.md says where it is on each system.
+      render: text

@@ -1,0 +1,16 @@
+name: Feature request
+description: An idea for oh-snap
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: The task you have, not only the feature. For example, "I snip the same area many times a day".
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: How oh-snap could help with it

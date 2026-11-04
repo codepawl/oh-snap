@@ -40,11 +40,24 @@ The script downloads the release for your system, checks it against `SHA256SUMS.
 - **macOS** 14 or later, Apple silicon or Intel. `install` copies oh-snap to `~/Applications` and starts it at sign-in. It turns off the macOS screenshot shortcuts, so Cmd+Shift+3, 4 and 5 open oh-snap. The first snip asks for the Screen Recording permission. Recording needs macOS 15.
 - **Linux** on X11 or Wayland, x86_64 or arm64. `install` copies oh-snap to `~/.local/bin` and starts it at sign-in. On X11 it takes Print, Shift+Print and Ctrl+Print. On Wayland the desktop's portal must allow the shortcuts. On GNOME, `install` binds Print to oh-snap for you. Text reading needs `tesseract`, and recording, GIFs and trim need `ffmpeg`. On Wayland, recording needs `wf-recorder`.
 
+## What works where
+
+| | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| Region, window, screen and free-shape snips | yes | yes | yes. Window snips need X11 |
+| Draw on the snip before you keep it | yes | yes | yes |
+| Read text and QR codes | yes, built in | yes, built in | QR built in, text with `tesseract` |
+| Colour picker | yes | yes | yes |
+| Screen recording, GIF and trim | yes | macOS 15 | with `ffmpeg` |
+| Editor, add-ons, pins, drag the snip out | yes | not yet | not yet |
+| Settings | window | `settings.toml` | `settings.toml` |
+| Updates itself | yes | yes | yes |
+
 ## Use
 
 | Action | Result |
 | --- | --- |
-| PrtSc or Win+Shift+S | Opens the overlay |
+| PrtSc or Win+Shift+S on Windows, Cmd+Shift+4 on macOS, Print on Linux | Opens the overlay |
 | Drag | Snips a region |
 | Click | Snips the window under the pointer. In `screen` mode, it snips the monitor |
 | `r` `w` `s` | Switches to region, window or screen mode |
@@ -54,9 +67,32 @@ The script downloads the release for your system, checks it against `SHA256SUMS.
 
 While you drag, bits of the screen break off the pointer like mined blocks and fall away.
 
-After you pick an area, oh-snap asks if you want to keep it. Press Enter to save, `e` to edit first, `r` to take it again, or Esc to cancel. If you want speed, tick "don't ask again" and every snip saves at once.
 
-![The dialog that asks to keep the snip](docs/confirm.png)
+## On the overlay
+
+Press `F` on the overlay to snip a free shape: drag around what you want. In a PNG and on the clipboard, everything outside the shape is see-through. In a JPG it is white.
+
+Press `D` on the overlay to draw before you keep the snip. Pick an area, a window or a screen, then use the bar next to it: arrow, box, pen, marker, text and hide, in five colours. Ctrl+Z undoes a step. Enter keeps the snip with your drawing, and Esc drops it. The drawing tools are the same as in the editor.
+
+Press Win+Shift+R, or `V` on the overlay, to record video. Pick an area, a window or a screen. After a 3 second countdown, a small bar shows the time with pause and stop, and a thin frame marks the area. Windows keeps both out of the video. Press Win+Shift+R again or click the tray icon to stop. The MP4 goes to `Videos\Screen Recordings`, with the pointer and the sound that your computer plays. Turn on `Microphone` in the settings to add your voice. The card can open the file, show it in Explorer, make a GIF next to it, or trim it.
+
+In the trim window, drag the two handles. You can also press `I` or `O` to choose a handle, then move it by 0.1 second with the arrow keys. Enter saves the part as a new file, and the recording itself stays as it is.
+
+Press `T` on the overlay to read text instead of keeping an image. Pick an area, a window or a screen, and the text goes to the clipboard. A QR code goes to the clipboard the same way, and when it holds a web link, a click on the card opens it. It uses the OCR engine in Windows, so it needs no download and takes about 100 ms.
+
+Press `C` on the overlay to copy the colour under the pointer as a hex value. The card also shows it as RGB and HSL.
+
+Press Shift+PrtSc to snip the last area again without the overlay, for before and after shots.
+
+The tray menu lists your last 10 snips under `recent snips`. Picking one puts it back on the clipboard and shows its card. For this, oh-snap keeps the last 20 snips in `%LOCALAPPDATA%\oh-snap\history`, also when saving to a folder is off. Set `Recent snips` to `off` in the settings to keep none and delete those copies, or pick `clear` to delete them once. `oh-snap uninstall` deletes them too.
+
+Drag the image on the card into a chat, a browser or Explorer to drop the file there.
+
+Right-click a snip and pick `pin to screen` to keep it on top of every window while you work. Drag the pin to move it, scroll to zoom, and Ctrl+scroll to make it see-through. Ctrl+C copies it, and Esc or a double-click closes it.
+
+oh-snap updates itself from GitHub Releases. The tray process looks for a new version 10 seconds after it starts and then every 6 hours. It downloads the new version and checks it against the release's `SHA256SUMS.txt`. On Windows it runs the new `oh-snap.exe` once to see that it starts. It swaps the new version in between snips, never in the middle of one. If a check fails, the working version stays. A card then shows the new version. Set `Updates` to `notify` to get only the card, or to `off`.
+
+On macOS, Cmd+Shift+4 snips a region, 3 the screen, 2 a window and 7 a free shape. Cmd+Shift+6 snips the last area again, and 5 starts a recording. On Linux with X11, Print opens the overlay, Shift+Print snips the last area and Ctrl+Print the screen.
 
 ## Settings
 
@@ -73,7 +109,7 @@ Open the settings from the tray menu or with `oh-snap settings`. A change saves 
 | Recording | Frame rate of 30 or 60, system sound, microphone |
 | System | Start at sign-in, updates: install on their own, only tell you, or off. `check now` looks at once |
 
-The settings live in `%APPDATA%\oh-snap\settings.toml`.
+The settings live in `%APPDATA%\oh-snap\settings.toml` on Windows, `~/Library/Application Support/oh-snap/settings.toml` on macOS and `~/.config/oh-snap/settings.toml` on Linux. On macOS and Linux, `oh-snap settings` opens that file.
 
 A snip plays a short shutter sound. It goes to the clipboard as a bitmap and as PNG, and to `Pictures\Screenshots`, the folder that Windows and Photos use. A card in the corner shows the snip and the file name. The ring in its corner empties until the card closes, and stops while the pointer is on the card. Click the card to open the image. Click `edit` to draw on it, or `folder` to show the file in Explorer. Right-click the image on the card or in the "keep this snip?" dialog to copy it, save a copy somewhere else, or edit it.
 
@@ -128,6 +164,8 @@ The speed numbers are from version 0.10.2, while other programs used about half 
 
 ## Commands
 
+`edit`, `addons`, `bench`, `preview` and `logo` are Windows only.
+
 ```text
 oh-snap                      start in the tray
 oh-snap install              install for this user and take the shortcuts
@@ -153,26 +191,6 @@ oh-snap trim FILE --from S [--to S]  save a part of a recording as a new file
 oh-snap quit                 stop the tray process
 ```
 
-Press `F` on the overlay to snip a free shape: drag around what you want. In a PNG and on the clipboard, everything outside the shape is see-through. In a JPG it is white.
-
-Press `D` on the overlay to draw before you keep the snip. Pick an area, a window or a screen, then use the bar next to it: arrow, box, pen, marker, text and hide, in five colours. Ctrl+Z undoes a step. Enter keeps the snip with your drawing, and Esc drops it. The drawing tools are the same as in the editor.
-
-Press Win+Shift+R, or `V` on the overlay, to record video. Pick an area, a window or a screen. After a 3 second countdown, a small bar shows the time with pause and stop, and a thin frame marks the area. Windows keeps both out of the video. Press Win+Shift+R again or click the tray icon to stop. The MP4 goes to `Videos\Screen Recordings`, with the pointer and the sound that your computer plays. Turn on `Microphone` in the settings to add your voice. The card can open the file, show it in Explorer, make a GIF next to it, or trim it. In the trim window, drag the two handles, or press `I` or `O` to choose a handle and the arrow keys to move it by 0.1 second. Enter saves the part as a new file, and the recording itself stays as it is. You can drag the card's image into another app.
-
-Press `T` on the overlay to read text instead of keeping an image. Pick an area, a window or a screen, and the text goes to the clipboard. A QR code goes to the clipboard the same way, and when it holds a web link, a click on the card opens it. It uses the OCR engine in Windows, so it needs no download and takes about 100 ms.
-
-Press `C` on the overlay to copy the colour under the pointer as a hex value. The card also shows it as RGB and HSL.
-
-Press Shift+PrtSc to snip the last area again without the overlay, for before and after shots.
-
-The tray menu lists your last 10 snips under `recent snips`. Picking one puts it back on the clipboard and shows its card. For this, oh-snap keeps the last 20 snips in `%LOCALAPPDATA%\oh-snap\history`, also when saving to a folder is off. Set `Recent snips` to `off` in the settings to keep none and delete those copies, or pick `clear` to delete them once. `oh-snap uninstall` deletes them too.
-
-Drag the image on the card into a chat, a browser or Explorer to drop the file there.
-
-Right-click a snip and pick `pin to screen` to keep it on top of every window while you work. Drag the pin to move it, scroll to zoom, and Ctrl+scroll to make it see-through. Ctrl+C copies it, and Esc or a double-click closes it.
-
-oh-snap updates itself from GitHub Releases. The tray process looks for a new version 10 seconds after it starts and then every 6 hours. It downloads the new `oh-snap.exe`, checks it against the release's `SHA256SUMS.txt`, runs it once to see that it starts, and swaps it in between snips, never in the middle of one. If a check fails, the working version stays. A card then shows the new version. Set `Updates` to `notify` to get only the card, or to `off`.
-
 Other apps and scripts can start a snip with `oh-snap capture` or an `oh-snap://capture/window` link.
 
 ## Build
@@ -180,6 +198,8 @@ Other apps and scripts can start a snip with `oh-snap capture` or an `oh-snap://
 ```text
 cargo build --release
 ```
+
+On macOS, the build needs the Xcode command line tools. `packaging/macos/make-app.sh` turns the binary into `oh-snap.app`. On Linux, the build needs no system library.
 
 On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that works. The one that Rust ships needs `as.exe`, which is not included. Run `rustup component add llvm-tools`, then put a copy of `llvm-ar.exe` named `dlltool.exe` on PATH. The MSVC toolchain does not need this step.
 
@@ -208,7 +228,7 @@ On macOS and Linux, `src/desktop` is one app for both:
 ## Known limits
 
 - The tray process keeps its capture device open so the overlay is fast. Thirty seconds after the last snip it gives its memory back to Windows: Task Manager shows about 0.3 MB while it waits. The first snip after that takes about 20 ms longer.
-- The release file is not code-signed yet. Smart App Control or SmartScreen can block it on some computers.
+- The Windows exe is not code-signed yet. Smart App Control or SmartScreen can block it on some computers. The macOS app is signed and notarized.
 - Windows does not let a normal process get keys while an elevated window has focus. In that case, use the tray icon.
 - Protected video (DRM) shows as black, and the UAC prompt cannot be captured.
 - Rotated monitors and HDR monitors are not tested yet.
@@ -219,6 +239,10 @@ On macOS and Linux, `src/desktop` is one app for both:
 - Add-ons that run after every snip, not only from the editor.
 - Live video frames in the macOS and Linux trim window.
 
+## Contributing
+
+Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). To report a security problem, see [SECURITY.md](SECURITY.md).
+
 ## License
 
-MIT
+MIT. The bundled JetBrains Mono font is under the SIL Open Font License, in `assets/fonts`.
