@@ -132,16 +132,18 @@ impl Capturer {
         Ok(capturer)
     }
 
-    /// Brings the screenshot up to date and returns it. Rebuilds the duplications once
-    /// when Windows invalidated them (resolution change, secure desktop, driver reset).
+    /// Brings the screenshot up to date and returns it. When that fails, the duplications are
+    /// rebuilt and tried once more: besides ACCESS_LOST (resolution change, secure desktop,
+    /// driver reset), Windows sometimes fails one frame with another error, such as
+    /// E_INVALIDARG, and the next try works.
     pub fn capture(&mut self) -> Result<&Screenshot> {
-        if let Err(first_error) = self.update_frames() {
+        if let Err(first_error) = self.update_frames().and_then(|()| self.read_back()) {
             if first_error.code() != DXGI_ERROR_ACCESS_LOST {
-                return Err(first_error);
+                crate::log::write(&format!("capture failed once, trying again: {}", first_error.message()));
             }
             *self = Capturer::new()?;
+            self.read_back()?;
         }
-        self.read_back()?;
         Ok(&self.screenshot)
     }
 
