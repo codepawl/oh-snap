@@ -4,6 +4,8 @@
 
 A fast screen snipping tool for Windows, macOS and Linux, written in Rust. On Windows it replaces Snipping Tool for PrtSc, Win+Shift+S and `ms-screenclip:` links. The program is one file of about 1.3 MB.
 
+Website: [ohsnap.codepawl.com](https://ohsnap.codepawl.com)
+
 ![The oh-snap overlay over a desktop](docs/overlay.png)
 
 ## Install
