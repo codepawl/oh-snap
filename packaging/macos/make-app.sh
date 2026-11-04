@@ -1,7 +1,9 @@
 #!/bin/bash
 # Builds oh-snap.app and oh-snap-macos.zip from two single-architecture binaries.
 # usage: make-app.sh <arm64 binary> <x86_64 binary> <output folder>
-# The signature is ad hoc; the Developer ID signature and notarization happen outside CI.
+# SIGN_IDENTITY picks the signature: a Developer ID from the keychain, or "-" (the default) for
+# an ad hoc one. With NOTARY_KEY_FILE, NOTARY_KEY_ID and NOTARY_ISSUER set as well, the app is
+# notarized and the ticket stapled, so Gatekeeper opens it even from a browser download.
 set -euo pipefail
 
 arm_binary="$1"
@@ -31,9 +33,24 @@ cp "$root/assets/oh-snap.png" "$iconset/icon_512x512.png"
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/oh-snap.icns"
 rm -rf "$iconset"
 
-codesign -s - --deep --force --options runtime --entitlements "$here/entitlements.plist" "$app"
+identity="${SIGN_IDENTITY:--}"
+if [ "$identity" = "-" ]; then
+    codesign -s - --force --options runtime --entitlements "$here/entitlements.plist" "$app"
+else
+    codesign -s "$identity" --force --options runtime --timestamp --entitlements "$here/entitlements.plist" "$app"
+fi
 codesign --verify --deep --strict "$app"
 "$app/Contents/MacOS/oh-snap" --version
 
 (cd "$output" && ditto -c -k --keepParent oh-snap.app oh-snap-macos.zip)
+
+if [ "$identity" != "-" ] && [ -n "${NOTARY_KEY_FILE:-}" ]; then
+    xcrun notarytool submit "$output/oh-snap-macos.zip"         --key "$NOTARY_KEY_FILE" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait
+    xcrun stapler staple "$app"
+    xcrun stapler validate "$app"
+    spctl --assess --type execute --verbose "$app"
+    # Zip again, so the download carries the stapled ticket.
+    rm "$output/oh-snap-macos.zip"
+    (cd "$output" && ditto -c -k --keepParent oh-snap.app oh-snap-macos.zip)
+fi
 echo "built $output/oh-snap-macos.zip ($version)"
