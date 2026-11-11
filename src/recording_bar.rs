@@ -26,7 +26,7 @@ use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW, IDC_ARROW, IDC_HAND, LWA_ALPHA,
     LoadCursorW, MA_NOACTIVATE, RegisterClassExW, SW_SHOWNOACTIVATE, SetCursor, SetLayeredWindowAttributes, SetTimer,
-    SetWindowDisplayAffinity, SetWindowLongPtrW, ShowWindow, WDA_EXCLUDEFROMCAPTURE, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+    SetWindowLongPtrW, ShowWindow, WM_LBUTTONUP, WM_MOUSEACTIVATE,
     WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
@@ -96,13 +96,6 @@ pub fn open(graphics: &Graphics, controls: Arc<Controls>, area: PixelRect) -> Re
     }
 }
 
-fn exclude_from_capture(hwnd: HWND) {
-    unsafe {
-        // Windows 10 before 2004 refuses this; the bar then shows if it is inside the area.
-        let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
-    }
-}
-
 /// A click-through ring just outside the area.
 fn open_frame(area: PixelRect) -> Result<HWND> {
     let accent = style::ACCENT;
@@ -142,7 +135,7 @@ fn open_frame(area: PixelRect) -> Result<HWND> {
         let _ = DeleteObject(hole.into());
         // The window owns the region from here on.
         SetWindowRgn(hwnd, Some(ring), false);
-        exclude_from_capture(hwnd);
+        crate::capture::exclude_from_capture(hwnd);
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         Ok(hwnd)
     }
@@ -232,7 +225,7 @@ fn open_bar(graphics: &Graphics, controls: Arc<Controls>, area: PixelRect) -> Re
         hovered: None,
         buttons: Vec::new(),
     });
-    exclude_from_capture(hwnd);
+    crate::capture::exclude_from_capture(hwnd);
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(bar) as isize);
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);

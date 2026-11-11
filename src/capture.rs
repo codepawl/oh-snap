@@ -4,7 +4,7 @@
 //! hands out a new frame when the screen changed since the last one we acquired, so
 //! the composite buffer is updated in place and stays valid when nothing changed.
 
-use windows::Win32::Foundation::{HMODULE, RECT};
+use windows::Win32::Foundation::{HMODULE, HWND, RECT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ,
@@ -20,6 +20,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput1, IDXGIOutput5,
     IDXGIOutputDuplication, IDXGIResource,
 };
+use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
 use windows::core::{Interface, Result};
 
 /// A rectangle in virtual-desktop pixels (physical, not DPI scaled).
@@ -435,6 +436,15 @@ fn duplicate_output(output: &windows::Win32::Graphics::Dxgi::IDXGIOutput, device
     unsafe { output1.DuplicateOutput(device) }
 }
 
+/// Keeps one of our own windows (the card, the recording bar) out of every screen capture,
+/// ours included, so a snip taken while it is still on screen does not show it. Windows 10
+/// before 2004 refuses this, and the window then shows up as before.
+pub fn exclude_from_capture(hwnd: HWND) {
+    unsafe {
+        let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+    }
+}
+
 fn union_of(rects: impl Iterator<Item = PixelRect>) -> PixelRect {
     let mut left = i32::MAX;
     let mut top = i32::MAX;
@@ -449,6 +459,11 @@ fn union_of(rects: impl Iterator<Item = PixelRect>) -> PixelRect {
     PixelRect::from_edges(left, top, right, bottom)
 }
 
+/// A process may duplicate each output once, so tests that capture the real screen take
+/// this first instead of running side by side.
+#[cfg(test)]
+pub static REAL_SCREEN_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,6 +473,7 @@ mod tests {
     #[test]
     #[ignore]
     fn a_rebuild_releases_the_old_duplications_first() {
+        let _one_at_a_time = REAL_SCREEN_TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut capturer = Capturer::new().unwrap();
         let refused = Capturer::new().err().expect("a second duplication of the same output was allowed");
         assert_eq!(refused.code(), windows::Win32::Foundation::E_INVALIDARG);
