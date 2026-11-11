@@ -2199,7 +2199,7 @@ dependencies = [
 
 [[package]]
 name = "oh-snap"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "ashpd",
  "block2 0.6.2",
