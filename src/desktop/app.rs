@@ -17,6 +17,7 @@ use winit::keyboard::{Key as LogicalKey, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId, WindowLevel};
 
 use super::finish::{self, Overrides};
+use super::pending;
 use super::platform::{Platform, RecordOptions, Recording, Screen, Trigger};
 use super::socket;
 use super::ui::card::{self, CardAction, CardLayout, CardModel};
@@ -275,7 +276,7 @@ impl ApplicationHandler<UserEvent> for App {
         let now = Instant::now();
         if self.delayed.as_ref().is_some_and(|(due, _)| *due <= now) {
             if let Some((_, trigger)) = self.delayed.take() {
-                self.handle_trigger(event_loop, trigger);
+                self.run_delayed(event_loop, trigger);
             }
         }
         self.tick_card(event_loop);
@@ -326,10 +327,11 @@ impl App {
                 event_loop.exit();
             }
             Trigger::Record if self.recording.is_some() => self.stop_recording(event_loop),
-            _ if self.session.is_some() || self.markup.is_some() || self.recording.is_some() => {}
-            Trigger::Snip(mode) => self.start_snip(event_loop, mode, Tool::Snip),
-            Trigger::Record => self.start_snip(event_loop, Mode::Region, Tool::Record),
-            Trigger::LastRegion => self.capture_last_region(event_loop),
+            // A capture already waiting (delay or card) ignores new ones until it runs.
+            _ if self.session.is_some() || self.markup.is_some() || self.recording.is_some() || self.delayed.is_some() => {}
+            Trigger::Snip(mode) => self.start_snip(event_loop, mode, Tool::Snip, false),
+            Trigger::Record => self.start_snip(event_loop, Mode::Region, Tool::Record, false),
+            Trigger::LastRegion => self.capture_last_region(event_loop, false),
             Trigger::OpenSettings => self.platform.open(&crate::folders::config_folder().join("settings.toml")),
             Trigger::OpenFolder => self.platform.open(&self.settings.save_folder()),
             Trigger::Recent(path) => self.copy_recent(event_loop, path),
@@ -512,11 +514,44 @@ impl App {
 
     // ------------------------------------------------------------ snipping
 
-    fn start_snip(&mut self, event_loop: &ActiveEventLoop, mode: Mode, tool: Tool) {
+    /// A capture whose wait (`defer_capture`) is over.
+    fn run_delayed(&mut self, event_loop: &ActiveEventLoop, trigger: Trigger) {
+        match trigger {
+            Trigger::Snip(mode) => self.start_snip(event_loop, mode, Tool::Snip, true),
+            Trigger::Record => self.start_snip(event_loop, Mode::Region, Tool::Record, true),
+            Trigger::LastRegion => self.capture_last_region(event_loop, true),
+            other => self.handle_trigger(event_loop, other),
+        }
+    }
+
+    /// Hides the card and, when the capture has to wait for the delay or for the card to
+    /// leave the screen, schedules `trigger` and returns true. `waited` says this is the
+    /// return from such a wait.
+    fn defer_capture(&mut self, delay: Duration, waited: bool, trigger: Trigger) -> bool {
+        let card_on_screen = self.card.is_some();
+        if let Some(card) = self.card.take() {
+            self.close_window(card.window);
+        }
+        match pending::wait_before_capture(delay, card_on_screen, waited) {
+            Some(wait) => {
+                self.delayed = Some((Instant::now() + wait, trigger));
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn start_snip(&mut self, event_loop: &ActiveEventLoop, mode: Mode, tool: Tool, waited: bool) {
         self.settings = settings::load();
-        if tool == Tool::Snip && self.settings.delay_seconds > 0 && self.delayed.is_none() {
-            let due = Instant::now() + Duration::from_secs(u64::from(self.settings.delay_seconds));
-            self.delayed = Some((due, Trigger::Snip(mode)));
+        let delay = match tool {
+            Tool::Snip => Duration::from_secs(u64::from(self.settings.delay_seconds)),
+            _ => Duration::ZERO,
+        };
+        let trigger = match tool {
+            Tool::Record => Trigger::Record,
+            _ => Trigger::Snip(mode),
+        };
+        if self.defer_capture(delay, waited, trigger) {
             return;
         }
         // The screens are captured before any of our windows exists.
@@ -525,9 +560,6 @@ impl App {
             Ok(_) => return self.show_failure(event_loop, "snip failed", "no screen to capture"),
             Err(error) => return self.show_failure(event_loop, "snip failed", &error),
         };
-        if let Some(card) = self.card.take() {
-            self.close_window(card.window);
-        }
         let options = OverlayOptions {
             extra_tools: true,
             snap_to_windows: self.settings.snap_to_windows,
@@ -737,10 +769,13 @@ impl App {
         }
     }
 
-    fn capture_last_region(&mut self, event_loop: &ActiveEventLoop) {
+    fn capture_last_region(&mut self, event_loop: &ActiveEventLoop, waited: bool) {
         let Some(area) = finish::last_region() else {
             return self.show_note(event_loop, "no last region yet", "snip one first");
         };
+        if self.defer_capture(Duration::ZERO, waited, Trigger::LastRegion) {
+            return;
+        }
         match finish::capture_area(self.platform.as_ref(), area) {
             Ok(image) => self.finish_snip(event_loop, image),
             Err(error) => self.show_failure(event_loop, "snip failed", &error),
