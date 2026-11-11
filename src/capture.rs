@@ -16,7 +16,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_MODE_ROTATION_ROTATE180, DXGI_MODE_ROTATION_ROTATE270,
 };
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_NOT_FOUND, DXGI_ERROR_WAIT_TIMEOUT,
+    CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, DXGI_ERROR_WAIT_TIMEOUT,
     DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput1, IDXGIOutput5,
     IDXGIOutputDuplication, IDXGIResource,
 };
@@ -132,19 +132,40 @@ impl Capturer {
         Ok(capturer)
     }
 
-    /// Brings the screenshot up to date and returns it. When that fails, the duplications are
-    /// rebuilt and tried once more: besides ACCESS_LOST (resolution change, secure desktop,
-    /// driver reset), Windows sometimes fails one frame with another error, such as
-    /// E_INVALIDARG, and the next try works.
+    /// Brings the screenshot up to date and returns it. When that fails (ACCESS_LOST after a
+    /// resolution change, secure desktop or driver reset, or another one-frame error), the
+    /// duplications are rebuilt.
     pub fn capture(&mut self) -> Result<&Screenshot> {
         if let Err(first_error) = self.update_frames().and_then(|()| self.read_back()) {
-            if first_error.code() != DXGI_ERROR_ACCESS_LOST {
-                crate::log::write(&format!("capture failed once, trying again: {}", first_error.message()));
-            }
-            *self = Capturer::new()?;
-            self.read_back()?;
+            crate::log::write(&format!("capture failed once, rebuilding: {}", first_error.message()));
+            self.rebuild()?;
         }
         Ok(&self.screenshot)
+    }
+
+    /// The old duplications are released first: a process may hold only one per output, and
+    /// DuplicateOutput answers a second one with E_INVALIDARG. Right after a display or
+    /// desktop switch the new ones can fail for a moment, so a few tries are spaced out.
+    fn rebuild(&mut self) -> Result<()> {
+        const ATTEMPTS: u32 = 3;
+        const PAUSE_BETWEEN_ATTEMPTS: std::time::Duration = std::time::Duration::from_millis(150);
+        self.monitors.clear();
+        let mut attempt = 1;
+        loop {
+            let rebuilt = Capturer::new().and_then(|mut capturer| capturer.read_back().map(|()| capturer));
+            match rebuilt {
+                Ok(capturer) => {
+                    *self = capturer;
+                    return Ok(());
+                }
+                Err(error) if attempt < ATTEMPTS => {
+                    crate::log::write(&format!("rebuild {attempt} of {ATTEMPTS} failed: {}", error.message()));
+                    std::thread::sleep(PAUSE_BETWEEN_ATTEMPTS);
+                    attempt += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub fn screenshot(&self) -> &Screenshot {
@@ -426,4 +447,22 @@ fn union_of(rects: impl Iterator<Item = PixelRect>) -> PixelRect {
         bottom = bottom.max(rect.bottom());
     }
     PixelRect::from_edges(left, top, right, bottom)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Needs a desktop: `cargo test -- --ignored`. A second duplication of a held output is
+    /// refused, which is why a rebuild must let go of the old ones first.
+    #[test]
+    #[ignore]
+    fn a_rebuild_releases_the_old_duplications_first() {
+        let mut capturer = Capturer::new().unwrap();
+        let refused = Capturer::new().err().expect("a second duplication of the same output was allowed");
+        assert_eq!(refused.code(), windows::Win32::Foundation::E_INVALIDARG);
+        capturer.rebuild().unwrap();
+        let screenshot = capturer.capture().unwrap();
+        assert!(!screenshot.pixels.is_empty());
+    }
 }
