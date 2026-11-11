@@ -171,6 +171,9 @@ pub fn show(graphics: &Graphics, image: Option<&Image>, message: CardMessage, ne
             size_of::<DWM_WINDOW_CORNER_PREFERENCE>() as u32,
         );
     }
+    // A snip started while the card is up must not catch it: closing it right before the
+    // capture is too late for DWM to take it off the frame.
+    crate::capture::exclude_from_capture(hwnd);
 
     let target = create_target(graphics, hwnd, pixel_width, pixel_height, dpi_x as f32)?;
     let thumbnail = match image {
@@ -902,5 +905,71 @@ mod tests {
         assert!(!is_web_link("cmd.exe /c del"));
         assert!(!is_web_link("https://example.com and more"));
         assert!(!is_web_link("WIFI:S:home;T:WPA;P:secret;;"));
+    }
+
+    /// Needs a desktop: `cargo test -- --ignored`. A snip started while a card is still up
+    /// must see what is behind the card, not the card.
+    #[test]
+    #[ignore]
+    fn a_card_on_screen_stays_out_of_the_capture() {
+        use crate::capture::Capturer;
+        use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, GetWindowRect, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
+        };
+
+        fn pump_messages_for(duration: std::time::Duration) {
+            let deadline = std::time::Instant::now() + duration;
+            let mut message = MSG::default();
+            while std::time::Instant::now() < deadline {
+                while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                    unsafe {
+                        let _ = TranslateMessage(&message);
+                        DispatchMessageW(&message);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+
+        fn mean_difference(before: &[[u8; 3]], after: &[[u8; 3]]) -> f64 {
+            let total: u64 = before
+                .iter()
+                .zip(after)
+                .map(|(left, right)| (0..3).map(|channel| left[channel].abs_diff(right[channel]) as u64).sum::<u64>())
+                .sum();
+            total as f64 / (before.len() * 3) as f64
+        }
+
+        let _one_at_a_time = crate::capture::REAL_SCREEN_TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        unsafe {
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
+        let graphics = Graphics::new().unwrap();
+        let mut capturer = Capturer::new().unwrap();
+        let near = PixelRect { left: 0, top: 0, width: 100, height: 100 };
+
+        // Where the card goes, then what is behind it with no card on screen.
+        show(&graphics, None, CardMessage::Failed("capture test".into()), near).unwrap();
+        let mut card_rect = RECT::default();
+        unsafe { GetWindowRect(CURRENT_CARD, &mut card_rect).unwrap() };
+        close_current();
+        pump_messages_for(std::time::Duration::from_millis(300));
+        let pixels_in_card = |screenshot: &crate::capture::Screenshot| -> Vec<[u8; 3]> {
+            (card_rect.top..card_rect.bottom)
+                .flat_map(|y| (card_rect.left..card_rect.right).map(move |x| (x, y)))
+                .filter_map(|(x, y)| screenshot.pixel_at(x, y))
+                .collect()
+        };
+        let behind = pixels_in_card(capturer.capture().unwrap());
+
+        show(&graphics, None, CardMessage::Failed("capture test".into()), near).unwrap();
+        pump_messages_for(std::time::Duration::from_millis(300));
+        let with_card_up = pixels_in_card(capturer.capture().unwrap());
+        close_current();
+
+        assert!(!behind.is_empty());
+        let difference = mean_difference(&behind, &with_card_up);
+        assert!(difference < 4.0, "the card showed in the capture (mean difference {difference:.1})");
     }
 }
