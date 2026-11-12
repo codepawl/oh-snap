@@ -22,6 +22,8 @@ pub fn command_for(trigger: &Trigger) -> String {
         Trigger::OpenFolder => "folder".into(),
         Trigger::Recent(path) => format!("recent {}", path.display()),
         Trigger::CheckUpdate => "update".into(),
+        Trigger::Report => "report".into(),
+        Trigger::CrashTest => "crash-test".into(),
     }
 }
 
@@ -36,6 +38,8 @@ pub fn parse_command(line: &str) -> Option<Trigger> {
         "settings" => Some(Trigger::OpenSettings),
         "folder" => Some(Trigger::OpenFolder),
         "update" => Some(Trigger::CheckUpdate),
+        "report" => Some(Trigger::Report),
+        "crash-test" => Some(Trigger::CrashTest),
         "recent" if !rest.is_empty() => Some(Trigger::Recent(PathBuf::from(rest))),
         _ => None,
     }
@@ -128,6 +132,8 @@ mod tests {
             Trigger::OpenFolder,
             Trigger::Recent(PathBuf::from("/tmp/a b.png")),
             Trigger::CheckUpdate,
+            Trigger::Report,
+            Trigger::CrashTest,
         ];
         for trigger in triggers {
             assert_eq!(parse_command(&command_for(&trigger)), Some(trigger.clone()), "{trigger:?}");

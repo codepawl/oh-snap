@@ -48,6 +48,7 @@ fn fixed_trigger(id: &str) -> Option<Trigger> {
         "folder" => Some(Trigger::OpenFolder),
         "settings" => Some(Trigger::OpenSettings),
         "update" => Some(Trigger::CheckUpdate),
+        "report" => Some(Trigger::Report),
         "quit" => Some(Trigger::Quit),
         _ => None,
     }
@@ -127,6 +128,7 @@ fn build_menu() -> Result<(Menu, Submenu), String> {
     result = result.and(menu.append(&MenuItem::with_id("folder", "open screenshots", true, None)));
     result = result.and(menu.append(&MenuItem::with_id("settings", "settings…", true, None)));
     result = result.and(menu.append(&MenuItem::with_id("update", "check for updates", true, None)));
+    result = result.and(menu.append(&MenuItem::with_id("report", "report a problem", true, None)));
     result = result.and(menu.append(&separator()));
     result = result.and(menu.append(&MenuItem::with_id("quit", "quit", true, None)));
     result.map_err(|error| format!("menu: {error}"))?;

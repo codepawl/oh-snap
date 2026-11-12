@@ -21,6 +21,8 @@ pub enum CardAction {
     Copy,
     Gif,
     Trim,
+    /// On the card that follows a crash: opens the filled-in bug report.
+    Report,
 }
 
 impl CardAction {
@@ -31,6 +33,7 @@ impl CardAction {
             CardAction::Copy => "copy",
             CardAction::Gif => "gif",
             CardAction::Trim => "trim",
+            CardAction::Report => "report",
         }
     }
 }

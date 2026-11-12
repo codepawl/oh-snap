@@ -28,6 +28,7 @@ usage
   oh-snap trim FILE --from S --to S  save a part of a recording as a new file
   oh-snap text FILE                print the QR code or the text in a PNG
   oh-snap update                   install the latest release from GitHub
+  oh-snap report [--print]         open a filled-in bug report; --print only shows the link
   oh-snap bench [ROUNDS]           measure capture and overlay speed
   oh-snap quit                     stop the tray process
 ";
@@ -51,8 +52,24 @@ pub fn main() {
 fn dispatch(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let first = arguments.first().map(String::as_str);
     match first {
-        None => Ok(daemon::run(false)?),
-        Some("daemon") => Ok(daemon::run(arguments.get(1).map(String::as_str) == Some("--after-update"))?),
+        None => Ok(daemon::run(daemon::Start::Normal)?),
+        Some("daemon") => Ok(daemon::run(match arguments.get(1).map(String::as_str) {
+            Some("--after-update") => daemon::Start::AfterUpdate,
+            Some("--after-crash") => daemon::Start::AfterCrash,
+            _ => daemon::Start::Normal,
+        })?),
+        Some("report") => {
+            println!("{}", crate::report::link());
+            if arguments.get(1).map(String::as_str) != Some("--print") {
+                crate::report::open();
+            }
+            Ok(())
+        }
+        Some("crash-test") if arguments.get(1).map(String::as_str) == Some("tray") => {
+            let tray = daemon::find_running().ok_or("the tray process is not running")?;
+            daemon::send_command(tray, "crash-test");
+            Ok(())
+        }
         Some("update") => updater::command(),
         Some("record") => record_command(&arguments[1..]),
         Some("crash-test") => crash::test(arguments.get(1).map(String::as_str)),

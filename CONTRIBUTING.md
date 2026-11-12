@@ -4,7 +4,9 @@ Thanks for helping. Bug reports, small fixes and tests on macOS and Linux help t
 
 ## Report a bug
 
-Open an issue with the bug report form. Include these:
+Pick `report a problem` in the tray menu or run `oh-snap report`. It opens the bug report form with the version and the log's crash and failure lines filled in, and you add what happened. After a crash, the card that shows up opens the same form.
+
+Or open an issue with the bug report form yourself. Include these:
 
 - The oh-snap version: `oh-snap --version`.
 - Your system: Windows build, macOS version, or Linux distribution with X11 or Wayland.

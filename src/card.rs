@@ -75,6 +75,8 @@ pub enum CardMessage {
     /// A colour from the overlay's colour tool, with its hex value on the clipboard.
     Color([u8; 3]),
     Failed(String),
+    /// The tray process crashed and is back. Clicking the card opens a filled-in bug report.
+    Crashed(String),
     /// The delay timer: seconds left before the capture.
     Countdown(u32),
     /// A plain note with the spark: updates and other news from the tray process.
@@ -448,7 +450,7 @@ impl CardState {
             CardMessage::Saved { path, .. } => path.as_deref(),
             CardMessage::Recent { path } => Some(path),
             CardMessage::Recorded { path, .. } => Some(path),
-            CardMessage::Failed(_) | CardMessage::Countdown(_) | CardMessage::Notice { .. } | CardMessage::Color(_) | CardMessage::QrCode(_) => None,
+            CardMessage::Failed(_) | CardMessage::Crashed(_) | CardMessage::Countdown(_) | CardMessage::Notice { .. } | CardMessage::Color(_) | CardMessage::QrCode(_) => None,
         }
     }
 
@@ -536,6 +538,10 @@ impl CardState {
     }
 
     fn run(&self, action: Action) {
+        if matches!(self.message, CardMessage::Crashed(_)) {
+            crate::report::open();
+            return;
+        }
         if let CardMessage::QrCode(payload) = &self.message {
             if is_web_link(payload) {
                 unsafe {
@@ -664,6 +670,14 @@ impl CardState {
                 draw_mark(&target, Mark::Cross, PADDING, line_top, mark_brush);
                 self.text(&target, "snip failed", PADDING + 16.0, line_top, &text);
                 self.text(&target, reason, PADDING + 16.0, line_top + LINE_HEIGHT, &dim);
+            }
+            CardMessage::Crashed(crash) => {
+                let mark_brush = failure.as_ref().unwrap_or(&accent);
+                draw_mark(&target, Mark::Cross, PADDING, line_top, mark_brush);
+                self.text(&target, "oh-snap crashed · click to report", PADDING + 16.0, line_top, &text);
+                // The address at the end is the part worth reading; the card is narrow.
+                let detail = crash.strip_prefix("exception ").unwrap_or(crash);
+                self.text(&target, detail, PADDING + 16.0, line_top + LINE_HEIGHT, &dim);
             }
             CardMessage::QrCode(payload) => {
                 draw_mark(&target, Mark::Check, PADDING, line_top, &accent);
