@@ -23,6 +23,8 @@ pub enum CardAction {
     Trim,
     SetUp,
     NotNow,
+    /// On the card that follows a crash: opens the filled-in bug report.
+    Report,
 }
 
 impl CardAction {
@@ -35,6 +37,7 @@ impl CardAction {
             CardAction::Trim => "trim",
             CardAction::SetUp => "set up",
             CardAction::NotNow => "not now",
+            CardAction::Report => "report",
         }
     }
 }

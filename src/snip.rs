@@ -52,7 +52,9 @@ pub fn pick(
     extra_tools: bool,
     start_tool: Tool,
 ) -> Result<Option<Picked>, Box<dyn std::error::Error>> {
+    let started = Instant::now();
     let screenshot = capturer.capture()?;
+    let capture_time = started.elapsed();
     let options = OverlayOptions {
         start_mode: request.mode,
         close_after_first_frame: false,
@@ -65,6 +67,15 @@ pub fn pick(
         shutter_on_release: request.settings.shutter_sound && !request.settings.confirm_before_save,
     };
     let outcome = overlay::select_area(graphics, screenshot, options)?;
+    // How long the shortcut took to show something, as it happened on this machine: the
+    // bench only knows the warm case.
+    if let Some(first_frame_at) = outcome.first_frame_at {
+        crate::log::write(&format!(
+            "overlay up in {} ms (capture {} ms)",
+            (first_frame_at - started).as_millis(),
+            capture_time.as_millis()
+        ));
+    }
     if let Some(color) = outcome.color {
         return Ok(Some(Picked::Color(color)));
     }
@@ -149,9 +160,12 @@ pub fn deliver_image(
         sound::play_shutter();
     }
     let png_bytes = output::encode_png(&image)?;
+    let png_time = started.elapsed();
     if settings.copy_to_clipboard {
         output::copy_to_clipboard(owner, &image, &png_bytes)?;
     }
+    let clipboard_time = started.elapsed() - png_time;
+    let files_started = Instant::now();
     let history = if settings.keep_recent_snips { crate::history::record(&png_bytes) } else { None };
     let mut saved_to = None;
     if let Some(path) = &request.output_path {
@@ -165,12 +179,15 @@ pub fn deliver_image(
         });
     }
     crate::log::write(&format!(
-        "snip {}x{} at {},{} delivered in {} ms",
+        "snip {}x{} at {},{} delivered in {} ms (png {}, clipboard {}, files {})",
         area.width,
         area.height,
         area.left,
         area.top,
-        started.elapsed().as_millis()
+        started.elapsed().as_millis(),
+        png_time.as_millis(),
+        clipboard_time.as_millis(),
+        files_started.elapsed().as_millis()
     ));
     Ok(SnipOutcome {
         area,

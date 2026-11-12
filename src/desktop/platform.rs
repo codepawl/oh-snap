@@ -35,6 +35,10 @@ pub enum Trigger {
     OpenFolder,
     Recent(PathBuf),
     CheckUpdate,
+    /// Open a filled-in bug report in the browser.
+    Report,
+    /// Die on purpose: `oh-snap crash-test tray` proves the restart and the report card.
+    CrashTest,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -69,6 +69,7 @@ const MENU_UPDATE: usize = 7;
 const MENU_LAST_REGION: usize = 8;
 const MENU_RECORD: usize = 9;
 const MENU_FREEFORM: usize = 10;
+const MENU_REPORT: usize = 11;
 const MENU_RECENT_FIRST: usize = 100;
 
 static DAEMON_WINDOW: AtomicIsize = AtomicIsize::new(0);
@@ -127,19 +128,30 @@ pub fn send_command(daemon: HWND, command: &str) {
     }
 }
 
-pub fn run(after_update: bool) -> Result<()> {
+/// What started the tray process.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    Normal,
+    /// The old version started the new one after swapping it in.
+    AfterUpdate,
+    /// A tray process that crashed started this one.
+    AfterCrash,
+}
+
+pub fn run(start: Start) -> Result<()> {
     let single_instance = unsafe { CreateMutexW(None, true, w!("Local\\oh-snap.daemon"))? };
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        if !after_update {
+        if start == Start::Normal {
             return Ok(());
         }
-        // Started by an update: wait for the old version to let go, then take over.
+        // Started by an update or a crash: wait for the old process to let go, then take over.
         let waited = unsafe { WaitForSingleObject(single_instance, 15_000) };
         if waited == WAIT_TIMEOUT {
             return Ok(());
         }
     }
     crate::updater::clean_up_old_exe();
+    crate::crash::watch_tray(start == Start::AfterCrash);
 
     unsafe {
         // WIC, used to draw the logo, needs COM; dragging a snip out of the card needs OLE.
@@ -156,6 +168,7 @@ pub fn run(after_update: bool) -> Result<()> {
     };
     unsafe { RegisterClassExW(&class) };
 
+    crate::capture::raise_gpu_priority();
     let graphics = Graphics::new()?;
     let icon = create_tray_icon(instance, &graphics)?;
     let mut daemon = Daemon {
@@ -200,7 +213,10 @@ pub fn run(after_update: bool) -> Result<()> {
     let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), Some(instance), 0)? };
     let settings = daemon.settings.clone();
     daemon.apply_settings(settings);
-    if after_update {
+    if let Some(crash) = crate::crash::take_pending() {
+        let _ = crate::card::show(&daemon.graphics, None, CardMessage::Crashed(crash), cursor_area());
+    }
+    if start == Start::AfterUpdate {
         let message = CardMessage::Notice {
             title: format!("updated to {}", crate::updater::CURRENT_VERSION),
             detail: "oh-snap restarted on the new version".into(),
@@ -363,6 +379,8 @@ impl Daemon {
             Some("check-update") => start_update_check(hwnd, true, std::time::Duration::ZERO),
             Some("record") => self.toggle_recording(hwnd),
             Some("quit") => unsafe { PostQuitMessage(0) },
+            // `oh-snap crash-test tray`: proves the restart and the report card.
+            Some("crash-test") => crate::crash::test(None),
             _ => {}
         }
     }
@@ -797,6 +815,7 @@ impl Daemon {
             let _ = AppendMenuW(menu, MF_STRING, MENU_FOLDER, w!("open screenshots"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("settings…"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_UPDATE, w!("check for updates"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_REPORT, w!("report a problem"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("quit"));
             let mut cursor = POINT::default();
@@ -826,6 +845,7 @@ impl Daemon {
                 MENU_FOLDER => open_folder(&self.settings.save_folder()),
                 MENU_SETTINGS => self.open_settings(),
                 MENU_UPDATE => start_update_check(hwnd, true, std::time::Duration::ZERO),
+                MENU_REPORT => crate::report::open(),
                 MENU_QUIT => PostQuitMessage(0),
                 _ => {}
             }
@@ -1192,7 +1212,7 @@ fn schedule_trim(hwnd: HWND) {
 
 /// Moves this process's pages to the standby list. They stay in RAM and come back on
 /// the next snip, but Windows can give them to other apps while oh-snap sits idle.
-fn trim_memory() {
+pub fn trim_memory() {
     unsafe {
         let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
     }
