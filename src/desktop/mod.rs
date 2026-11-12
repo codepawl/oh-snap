@@ -3,6 +3,7 @@
 //! `app` (the winit shell that shows them).
 
 pub mod finish;
+pub mod pending;
 pub mod platform;
 pub mod socket;
 pub mod ui;

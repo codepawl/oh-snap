@@ -4,7 +4,7 @@
 //! hands out a new frame when the screen changed since the last one we acquired, so
 //! the composite buffer is updated in place and stays valid when nothing changed.
 
-use windows::Win32::Foundation::{HMODULE, RECT};
+use windows::Win32::Foundation::{HMODULE, HWND, RECT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ,
@@ -16,10 +16,11 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_MODE_ROTATION_ROTATE180, DXGI_MODE_ROTATION_ROTATE270,
 };
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_NOT_FOUND, DXGI_ERROR_WAIT_TIMEOUT,
+    CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, DXGI_ERROR_WAIT_TIMEOUT,
     DXGI_OUTDUPL_FRAME_INFO, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput1, IDXGIOutput5,
     IDXGIOutputDuplication, IDXGIResource,
 };
+use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
 use windows::core::{Interface, Result};
 
 /// A rectangle in virtual-desktop pixels (physical, not DPI scaled).
@@ -132,19 +133,40 @@ impl Capturer {
         Ok(capturer)
     }
 
-    /// Brings the screenshot up to date and returns it. When that fails, the duplications are
-    /// rebuilt and tried once more: besides ACCESS_LOST (resolution change, secure desktop,
-    /// driver reset), Windows sometimes fails one frame with another error, such as
-    /// E_INVALIDARG, and the next try works.
+    /// Brings the screenshot up to date and returns it. When that fails (ACCESS_LOST after a
+    /// resolution change, secure desktop or driver reset, or another one-frame error), the
+    /// duplications are rebuilt.
     pub fn capture(&mut self) -> Result<&Screenshot> {
         if let Err(first_error) = self.update_frames().and_then(|()| self.read_back()) {
-            if first_error.code() != DXGI_ERROR_ACCESS_LOST {
-                crate::log::write(&format!("capture failed once, trying again: {}", first_error.message()));
-            }
-            *self = Capturer::new()?;
-            self.read_back()?;
+            crate::log::write(&format!("capture failed once, rebuilding: {}", first_error.message()));
+            self.rebuild()?;
         }
         Ok(&self.screenshot)
+    }
+
+    /// The old duplications are released first: a process may hold only one per output, and
+    /// DuplicateOutput answers a second one with E_INVALIDARG. Right after a display or
+    /// desktop switch the new ones can fail for a moment, so a few tries are spaced out.
+    fn rebuild(&mut self) -> Result<()> {
+        const ATTEMPTS: u32 = 3;
+        const PAUSE_BETWEEN_ATTEMPTS: std::time::Duration = std::time::Duration::from_millis(150);
+        self.monitors.clear();
+        let mut attempt = 1;
+        loop {
+            let rebuilt = Capturer::new().and_then(|mut capturer| capturer.read_back().map(|()| capturer));
+            match rebuilt {
+                Ok(capturer) => {
+                    *self = capturer;
+                    return Ok(());
+                }
+                Err(error) if attempt < ATTEMPTS => {
+                    crate::log::write(&format!("rebuild {attempt} of {ATTEMPTS} failed: {}", error.message()));
+                    std::thread::sleep(PAUSE_BETWEEN_ATTEMPTS);
+                    attempt += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub fn screenshot(&self) -> &Screenshot {
@@ -414,6 +436,15 @@ fn duplicate_output(output: &windows::Win32::Graphics::Dxgi::IDXGIOutput, device
     unsafe { output1.DuplicateOutput(device) }
 }
 
+/// Keeps one of our own windows (the card, the recording bar) out of every screen capture,
+/// ours included, so a snip taken while it is still on screen does not show it. Windows 10
+/// before 2004 refuses this, and the window then shows up as before.
+pub fn exclude_from_capture(hwnd: HWND) {
+    unsafe {
+        let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+    }
+}
+
 fn union_of(rects: impl Iterator<Item = PixelRect>) -> PixelRect {
     let mut left = i32::MAX;
     let mut top = i32::MAX;
@@ -426,4 +457,28 @@ fn union_of(rects: impl Iterator<Item = PixelRect>) -> PixelRect {
         bottom = bottom.max(rect.bottom());
     }
     PixelRect::from_edges(left, top, right, bottom)
+}
+
+/// A process may duplicate each output once, so tests that capture the real screen take
+/// this first instead of running side by side.
+#[cfg(test)]
+pub static REAL_SCREEN_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Needs a desktop: `cargo test -- --ignored`. A second duplication of a held output is
+    /// refused, which is why a rebuild must let go of the old ones first.
+    #[test]
+    #[ignore]
+    fn a_rebuild_releases_the_old_duplications_first() {
+        let _one_at_a_time = REAL_SCREEN_TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut capturer = Capturer::new().unwrap();
+        let refused = Capturer::new().err().expect("a second duplication of the same output was allowed");
+        assert_eq!(refused.code(), windows::Win32::Foundation::E_INVALIDARG);
+        capturer.rebuild().unwrap();
+        let screenshot = capturer.capture().unwrap();
+        assert!(!screenshot.pixels.is_empty());
+    }
 }

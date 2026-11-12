@@ -771,6 +771,7 @@ mod tests {
     #[test]
     #[ignore]
     fn a_pause_leaves_no_gap_in_the_recording() {
+        let _one_at_a_time = crate::capture::REAL_SCREEN_TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let path = test_recording_path("pause");
         let controls = Arc::new(Controls::default());
         controls.go.store(true, Ordering::SeqCst);
@@ -797,6 +798,7 @@ mod tests {
     #[test]
     #[ignore]
     fn stopping_during_the_countdown_leaves_no_file() {
+        let _one_at_a_time = crate::capture::REAL_SCREEN_TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let path = test_recording_path("countdown");
         let controls = Controls::default();
         controls.stop.store(true, Ordering::SeqCst);
