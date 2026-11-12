@@ -445,6 +445,33 @@ pub fn exclude_from_capture(hwnd: HWND) {
     }
 }
 
+/// Asks the GPU scheduler to run this process's work ahead of normal apps. A snip is a few
+/// milliseconds of GPU work, but behind a render that fills the card it waits its turn.
+/// The function is in gdi32 without a header in the SDK, so it is looked up by name; when
+/// it is missing or refused, the process stays at the normal class.
+pub fn raise_gpu_priority() {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    use windows::Win32::System::Threading::GetCurrentProcess;
+    use windows::core::{s, w};
+
+    type SetSchedulingPriorityClass = unsafe extern "system" fn(HANDLE, i32) -> i32;
+    // D3DKMT_SCHEDULINGPRIORITYCLASS_HIGH. Realtime, one above, needs a privilege.
+    const HIGH_PRIORITY_CLASS: i32 = 4;
+
+    let Ok(gdi32) = (unsafe { LoadLibraryW(w!("gdi32.dll")) }) else {
+        return;
+    };
+    let Some(address) = (unsafe { GetProcAddress(gdi32, s!("D3DKMTSetProcessSchedulingPriorityClass")) }) else {
+        return;
+    };
+    let set_priority_class: SetSchedulingPriorityClass = unsafe { std::mem::transmute(address) };
+    let status = unsafe { set_priority_class(GetCurrentProcess(), HIGH_PRIORITY_CLASS) };
+    if status != 0 {
+        crate::log::write(&format!("GPU priority stays normal: status {status:#x}"));
+    }
+}
+
 fn union_of(rects: impl Iterator<Item = PixelRect>) -> PixelRect {
     let mut left = i32::MAX;
     let mut top = i32::MAX;

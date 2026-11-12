@@ -156,6 +156,7 @@ pub fn run(after_update: bool) -> Result<()> {
     };
     unsafe { RegisterClassExW(&class) };
 
+    crate::capture::raise_gpu_priority();
     let graphics = Graphics::new()?;
     let icon = create_tray_icon(instance, &graphics)?;
     let mut daemon = Daemon {
@@ -1192,7 +1193,7 @@ fn schedule_trim(hwnd: HWND) {
 
 /// Moves this process's pages to the standby list. They stay in RAM and come back on
 /// the next snip, but Windows can give them to other apps while oh-snap sits idle.
-fn trim_memory() {
+pub fn trim_memory() {
     unsafe {
         let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
     }

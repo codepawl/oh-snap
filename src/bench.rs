@@ -8,6 +8,10 @@ use crate::output;
 use crate::overlay::{self, Graphics, Mode, OverlayOptions};
 
 pub fn run(overlay_rounds: usize) -> Result<(), Box<dyn std::error::Error>> {
+    // The tray process does the same; the variable is there to measure without it.
+    if std::env::var_os("OH_SNAP_NORMAL_GPU_PRIORITY").is_none() {
+        crate::capture::raise_gpu_priority();
+    }
     let started = Instant::now();
     let mut capturer = Capturer::new()?;
     let init_time = started.elapsed();
@@ -40,27 +44,28 @@ pub fn run(overlay_rounds: usize) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut overlay_times = Vec::new();
     for _ in 0..overlay_rounds {
-        let shortcut_pressed = Instant::now();
-        let screenshot = capturer.capture()?;
-        let options = OverlayOptions {
-            start_mode: Mode::Region,
-            close_after_first_frame: true,
-            particles: crate::settings::ParticleMode::Off,
-            show_loupe: true,
-            show_crosshair: true,
-            snap_to_windows: true,
-            extra_tools: true,
-            start_tool: crate::overlay::Tool::Snip,
-            shutter_on_release: false,
-        };
-        let outcome = overlay::select_area(&graphics, screenshot, options)?;
-        if let Some(first_frame_at) = outcome.first_frame_at {
-            overlay_times.push(first_frame_at - shortcut_pressed);
+        if let Some(time) = overlay_round(&mut capturer, &graphics)? {
+            overlay_times.push(time);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     if !overlay_times.is_empty() {
         println!("overlay    {}  (shortcut to first frame, goal < 50 ms)", summary(&mut overlay_times));
+    }
+
+    // The tray process frees the CPU copy after a snip and trims its memory when idle, so
+    // the first snip after a quiet spell pays to bring both back.
+    let mut idle_times = Vec::new();
+    for _ in 0..overlay_rounds.min(5) {
+        capturer.release_cpu_memory();
+        crate::daemon::trim_memory();
+        std::thread::sleep(Duration::from_millis(300));
+        if let Some(time) = overlay_round(&mut capturer, &graphics)? {
+            idle_times.push(time);
+        }
+    }
+    if !idle_times.is_empty() {
+        println!("after idle {}  (same, with memory trimmed first)", summary(&mut idle_times));
     }
 
     let monitor = capturer.screenshot().monitors[0];
@@ -79,6 +84,25 @@ pub fn run(overlay_rounds: usize) -> Result<(), Box<dyn std::error::Error>> {
         png_bytes.len() / 1024
     );
     Ok(())
+}
+
+/// One press of the shortcut: capture, then the overlay's first frame.
+fn overlay_round(capturer: &mut Capturer, graphics: &Graphics) -> Result<Option<Duration>, Box<dyn std::error::Error>> {
+    let shortcut_pressed = Instant::now();
+    let screenshot = capturer.capture()?;
+    let options = OverlayOptions {
+        start_mode: Mode::Region,
+        close_after_first_frame: true,
+        particles: crate::settings::ParticleMode::Off,
+        show_loupe: true,
+        show_crosshair: true,
+        snap_to_windows: true,
+        extra_tools: true,
+        start_tool: crate::overlay::Tool::Snip,
+        shutter_on_release: false,
+    };
+    let outcome = overlay::select_area(graphics, screenshot, options)?;
+    Ok(outcome.first_frame_at.map(|first_frame_at| first_frame_at - shortcut_pressed))
 }
 
 fn millis(duration: Duration) -> String {

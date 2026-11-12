@@ -109,6 +109,8 @@ enum Action {
     Edit,
     Gif,
     Trim,
+    /// The X that takes the ring's place while the pointer is on the card.
+    Close,
 }
 
 static mut CURRENT_CARD: HWND = HWND(std::ptr::null_mut());
@@ -367,13 +369,16 @@ unsafe extern "system" fn card_proc(hwnd: HWND, message: u32, wparam: WPARAM, lp
         }
         WM_LBUTTONDOWN => {
             let point = state.to_dips(hwnd, lparam);
-            state.press = state.over_thumbnail(point).then_some(point);
+            let on_close_button = state.action_at(point) == Some(Action::Close);
+            state.press = (state.over_thumbnail(point) && !on_close_button).then_some(point);
             LRESULT(0)
         }
         WM_LBUTTONUP => {
             state.press = None;
             let action = state.action_at(state.to_dips(hwnd, lparam)).unwrap_or(Action::OpenFile);
-            state.run(action);
+            if action != Action::Close {
+                state.run(action);
+            }
             unsafe {
                 let _ = DestroyWindow(hwnd);
             }
@@ -554,6 +559,7 @@ impl CardState {
                 Action::Edit => crate::daemon::open_editor(self.graphics(), path.to_path_buf()),
                 Action::Gif => crate::daemon::make_gif(path),
                 Action::Trim => crate::daemon::open_trim(path),
+                Action::Close => {}
             }
         }
     }
@@ -695,9 +701,21 @@ impl CardState {
         }
         if !matches!(self.message, CardMessage::Countdown(_)) {
             let center = (width - PADDING - RING_RADIUS, PADDING + RING_RADIUS);
-            let held_open = self.hide_started.is_none();
-            let arc_brush = if held_open { &dim } else { &accent };
-            draw_countdown_ring(self.graphics(), &target, center, self.time_left(), &rule, arc_brush);
+            if self.pointer_inside {
+                let close_hovered = self.hovered_action == Some(Action::Close);
+                let cross_brush = if close_hovered { &text } else { &dim };
+                let backing_brush = if close_hovered { Some(&hover) } else { None };
+                draw_close_button(&target, center, backing_brush, cross_brush);
+                let reach = RING_RADIUS + 6.0;
+                buttons.push((
+                    Action::Close,
+                    D2D_RECT_F { left: center.0 - reach, top: center.1 - reach, right: center.0 + reach, bottom: center.1 + reach },
+                ));
+            } else {
+                let held_open = self.hide_started.is_none();
+                let arc_brush = if held_open { &dim } else { &accent };
+                draw_countdown_ring(self.graphics(), &target, center, self.time_left(), &rule, arc_brush);
+            }
         }
         // Anywhere else on the card opens the file.
         buttons.push((
@@ -858,6 +876,43 @@ fn draw_countdown_ring(
         if sink.Close().is_ok() {
             target.DrawGeometry(&geometry, arc, STROKE, None);
         }
+    }
+}
+
+/// The X that closes the card, on the same dark disc as the ring so it reads over the thumbnail.
+fn draw_close_button(
+    target: &ID2D1RenderTarget,
+    center: (f32, f32),
+    hovered_backing: Option<&ID2D1SolidColorBrush>,
+    cross: &ID2D1SolidColorBrush,
+) {
+    use windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE;
+    use windows_numerics::Vector2;
+    const ARM: f32 = 4.0;
+    let middle = Vector2 { X: center.0, Y: center.1 };
+    let backing = D2D1_ELLIPSE { point: middle, radiusX: RING_RADIUS + 4.0, radiusY: RING_RADIUS + 4.0 };
+    let Ok(ink) = (unsafe { target.CreateSolidColorBrush(&style::INK, None) }) else {
+        return;
+    };
+    unsafe {
+        target.FillEllipse(&backing, &ink);
+        if let Some(hover) = hovered_backing {
+            target.FillEllipse(&backing, hover);
+        }
+        target.DrawLine(
+            Vector2 { X: center.0 - ARM, Y: center.1 - ARM },
+            Vector2 { X: center.0 + ARM, Y: center.1 + ARM },
+            cross,
+            1.6,
+            None,
+        );
+        target.DrawLine(
+            Vector2 { X: center.0 + ARM, Y: center.1 - ARM },
+            Vector2 { X: center.0 - ARM, Y: center.1 + ARM },
+            cross,
+            1.6,
+            None,
+        );
     }
 }
 
