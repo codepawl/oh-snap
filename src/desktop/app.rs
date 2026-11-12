@@ -146,6 +146,9 @@ pub fn run(first: Option<(Trigger, bool)>, overrides: Overrides) -> Result<(), S
     let event_loop = builder.build().map_err(|error| format!("no window system: {error}"))?;
     let proxy = event_loop.create_proxy();
     if !one_shot {
+        if crate::crash::started_after_crash() {
+            wait_for_crashed_daemon();
+        }
         let socket_proxy = proxy.clone();
         socket::serve(move |trigger| {
             let _ = socket_proxy.send_event(UserEvent::Trigger(trigger));
@@ -180,6 +183,15 @@ pub fn run(first: Option<(Trigger, bool)>, overrides: Overrides) -> Result<(), S
     result
 }
 
+/// A daemon that a crash started can come up while the crashed one still holds the socket.
+fn wait_for_crashed_daemon() {
+    const PATIENCE: Duration = Duration::from_secs(10);
+    let started = Instant::now();
+    while socket::daemon_is_running() && started.elapsed() < PATIENCE {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.started {
@@ -196,6 +208,16 @@ impl ApplicationHandler<UserEvent> for App {
             if let Err(error) = self.platform.listen(send) {
                 crate::log::write(&format!("listen: {error}"));
                 eprintln!("oh-snap: {error}");
+            }
+            if let Some(crash) = crate::crash::take_pending() {
+                let content = CardContent {
+                    headline: "oh-snap crashed".into(),
+                    detail: crash.chars().take(40).collect(),
+                    actions: vec![CardAction::Report],
+                    failed: true,
+                    ..CardContent::default()
+                };
+                self.show_card(event_loop, content);
             }
         }
         if let Some(trigger) = self.first.take() {
@@ -327,6 +349,8 @@ impl App {
                 event_loop.exit();
             }
             Trigger::Record if self.recording.is_some() => self.stop_recording(event_loop),
+            Trigger::Report => self.open_report(),
+            Trigger::CrashTest => crate::crash::test(None),
             // A capture already waiting (delay or card) ignores new ones until it runs.
             _ if self.session.is_some() || self.markup.is_some() || self.recording.is_some() || self.delayed.is_some() => {}
             Trigger::Snip(mode) => self.start_snip(event_loop, mode, Tool::Snip, false),
@@ -901,6 +925,11 @@ impl App {
         self.show_card(event_loop, CardContent { headline: headline.into(), detail: detail.chars().take(40).collect(), failed: true, ..CardContent::default() });
     }
 
+    /// The browser takes the link the same way the file manager takes a path.
+    fn open_report(&self) {
+        self.platform.open(std::path::Path::new(&crate::report::link()));
+    }
+
     fn show_note(&mut self, event_loop: &ActiveEventLoop, headline: &str, detail: &str) {
         self.show_card(event_loop, CardContent { headline: headline.into(), detail: detail.into(), ..CardContent::default() });
     }
@@ -994,6 +1023,7 @@ impl App {
             (CardAction::Open, Some(path)) => self.platform.open(&path),
             (CardAction::Folder, Some(path)) => self.platform.reveal(&path),
             (CardAction::Copy, _) => self.copy_card_image(),
+            (CardAction::Report, _) => self.open_report(),
             (CardAction::Gif, Some(path)) => self.make_in_background("gif ready", move |platform| platform.make_gif(&path)),
             (CardAction::Trim, Some(path)) => match length {
                 Some(length) => self.open_trim(event_loop, path, length),

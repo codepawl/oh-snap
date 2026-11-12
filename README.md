@@ -186,6 +186,7 @@ oh-snap preview DIR          draw the overlay, the card and the editor into PNG 
 oh-snap logo DIR             write the logo as SVG, PNG and ICO
 oh-snap settings             open the settings
 oh-snap update               install the latest release from GitHub
+oh-snap report [--print]     open a filled-in bug report; --print only shows the link
 oh-snap text FILE            print the QR code or the text in a PNG
 oh-snap record --rect X,Y,W,H [--seconds N] [--fps N] [--no-sound] [--microphone] [--out FILE]
 oh-snap gif FILE             make a GIF from a recording
@@ -203,7 +204,7 @@ cargo build --release
 
 On macOS, the build needs the Xcode command line tools. `packaging/macos/make-app.sh` turns the binary into `oh-snap.app`. On Linux, the build needs no system library.
 
-On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that works. The one that Rust ships needs `as.exe`, which is not included. Run `rustup component add llvm-tools`, then put a copy of `llvm-ar.exe` named `dlltool.exe` on PATH. The MSVC toolchain does not need this step.
+On Windows, build with the MSVC toolchain, as CI does: `rustup override set stable-x86_64-pc-windows-msvc` in this folder. On the `x86_64-pc-windows-gnu` toolchain, `windows-rs` needs a `dlltool` that works. The one that Rust ships needs `as.exe`, which is not included. A copy of `llvm-ar.exe` named `dlltool.exe` on PATH builds, but the debug build then dies before `main` with an access violation: the import of `GetProcessHeap` is left unbound. Only its release build runs.
 
 ## How it works
 
@@ -218,7 +219,8 @@ On Windows:
 - `updater.rs` finds the latest tag from where `releases/latest` redirects, so it does not use the GitHub API and its limit of 60 calls an hour. HTTPS goes through WinHTTP and SHA-256 through CNG, both part of Windows.
 - `recorder.rs` takes frames from the same capture device, draws the pointer with GDI, encodes H.264 and AAC with Media Foundation, and gets the system sound from WASAPI loopback. All of these ship with Windows, so the program stays small. `gif_export.rs` decodes the MP4 with Media Foundation and keeps only the pixels that change.
 - `trim.rs` decodes and encodes each frame with Media Foundation, so a cut starts on the exact frame and not on a key frame.
-- `crash.rs` writes a line to `%LOCALAPPDATA%\oh-snap\oh-snap.log` when the program dies, with the module and offset, so a bug report can say where.
+- `crash.rs` writes a line to `%LOCALAPPDATA%\oh-snap\oh-snap.log` when the program dies, with the module and offset, so a bug report can say where. On macOS and Linux it writes the signal the program died of. When the tray process dies, it starts a new one, and a card says so. A second crash within a minute of that restart stays down, so it cannot loop.
+- `report.rs` builds the link behind that card, `report a problem` in the tray menu and `oh-snap report`. It opens the bug report form on GitHub with the version and the log's crash and failure lines filled in, and with your home folder replaced by `~`. oh-snap sends nothing by itself: you read the form and press submit.
 - `install.rs` writes only to `HKCU` and keeps the old PrtSc setting, so `uninstall` can restore it.
 
 On macOS and Linux, `src/desktop` is one app for both:

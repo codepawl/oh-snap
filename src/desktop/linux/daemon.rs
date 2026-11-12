@@ -85,6 +85,7 @@ impl ksni::Tray for SnapTray {
             item("open screenshots", Trigger::OpenFolder),
             item("settings…", Trigger::OpenSettings),
             item("check for updates", Trigger::CheckUpdate),
+            item("report a problem", Trigger::Report),
             MenuItem::Separator,
             item("quit", Trigger::Quit),
         ]

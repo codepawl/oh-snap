@@ -24,6 +24,8 @@ mod palette;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod qr;
 #[cfg_attr(not(windows), allow(dead_code))]
+mod report;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod settings;
 
 // Windows only.

@@ -41,6 +41,7 @@ usage
   oh-snap install                  run at sign-in and take the shortcuts
   oh-snap uninstall                undo install
   oh-snap update                   install the newest release now
+  oh-snap report [--print]         open a filled-in bug report; --print only shows the link
   oh-snap settings                 open the settings file
   oh-snap quit                     stop the tray process
   oh-snap --version
@@ -87,7 +88,20 @@ fn dispatch(arguments: &[String]) -> Result<(), String> {
             print!("{HELP}");
             Ok(())
         }
-        None | Some("daemon") => run_app(None, Overrides::default()),
+        None | Some("daemon") => {
+            crate::crash::watch_tray(rest.first().map(String::as_str) == Some("--after-crash"));
+            run_app(None, Overrides::default())
+        }
+        Some("report") => {
+            let link = crate::report::link();
+            println!("{link}");
+            if rest.first().map(String::as_str) != Some("--print") {
+                current_platform().open(std::path::Path::new(&link));
+            }
+            Ok(())
+        }
+        Some("crash-test") if rest.first().map(String::as_str) == Some("tray") => forward("crash-test").map(|_| ()),
+        Some("crash-test") => crate::crash::test(rest.first().map(String::as_str)),
         Some("capture") => capture_command(rest),
         Some("record") => record_command(rest),
         Some("gif") => {
