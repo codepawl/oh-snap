@@ -53,4 +53,26 @@ if [ "$identity" != "-" ] && [ -n "${NOTARY_KEY_FILE:-}" ]; then
     rm "$output/oh-snap-macos.zip"
     (cd "$output" && ditto -c -k --keepParent oh-snap.app oh-snap-macos.zip)
 fi
-echo "built $output/oh-snap-macos.zip ($version)"
+
+# The disk image for people who download by hand: the app next to a link to /Applications.
+# The zip stays the asset that `install.sh` and the updater read.
+dmg="$output/oh-snap-macos.dmg"
+staging="$output/dmg"
+rm -rf "$staging" "$dmg"
+mkdir -p "$staging"
+ditto "$app" "$staging/oh-snap.app"
+ln -s /Applications "$staging/Applications"
+hdiutil create -volname "oh-snap $version" -srcfolder "$staging" -fs HFS+ -format ULMO -ov "$dmg" > /dev/null
+rm -rf "$staging"
+if [ "$identity" != "-" ]; then
+    codesign -s "$identity" --force --timestamp "$dmg"
+    if [ -n "${NOTARY_KEY_FILE:-}" ]; then
+        xcrun notarytool submit "$dmg" --key "$NOTARY_KEY_FILE" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait
+        xcrun stapler staple "$dmg"
+        xcrun stapler validate "$dmg"
+        spctl --assess --type open --context context:primary-signature --verbose "$dmg"
+    fi
+fi
+hdiutil verify "$dmg" > /dev/null
+
+echo "built $output/oh-snap-macos.zip and $output/oh-snap-macos.dmg ($version)"

@@ -39,6 +39,8 @@ curl -fsSL https://raw.githubusercontent.com/codepawl/oh-snap/main/install.sh | 
 
 The script downloads the release for your system, checks it against `SHA256SUMS.txt` and runs `oh-snap install`. To undo the install, run `oh-snap uninstall`.
 
+On macOS you can also download `oh-snap-macos.dmg` from [GitHub Releases](https://github.com/codepawl/oh-snap/releases), drag oh-snap to Applications and open it there. The first time, a card asks to set it up: `set up` does what `oh-snap install` does, and `not now` stops the question.
+
 - **macOS** 14 or later, Apple silicon or Intel. `install` copies oh-snap to `~/Applications` and starts it at sign-in. It turns off the macOS screenshot shortcuts, so Cmd+Shift+3, 4 and 5 open oh-snap. The first snip asks for the Screen Recording permission. Recording needs macOS 15.
 - **Linux** on X11 or Wayland, x86_64 or arm64. `install` copies oh-snap to `~/.local/bin` and starts it at sign-in. On X11 it takes Print, Shift+Print and Ctrl+Print. On Wayland the desktop's portal must allow the shortcuts. On GNOME, `install` binds Print to oh-snap for you. Text reading needs `tesseract`, and recording, GIFs and trim need `ffmpeg`. On Wayland, recording needs `wf-recorder`.
 

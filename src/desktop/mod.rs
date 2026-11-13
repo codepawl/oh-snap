@@ -88,9 +88,10 @@ fn dispatch(arguments: &[String]) -> Result<(), String> {
             print!("{HELP}");
             Ok(())
         }
+        // Opened by hand (Finder, `open`): offer setup. The sign-in agent passes `daemon`.
         None | Some("daemon") => {
             crate::crash::watch_tray(rest.first().map(String::as_str) == Some("--after-crash"));
-            run_app(None, Overrides::default())
+            run_app(None, Overrides::default(), first.is_none())
         }
         Some("report") => {
             let link = crate::report::link();
@@ -153,14 +154,14 @@ fn daemon_is_running() -> bool {
     }
 }
 
-fn run_app(first: Option<(Trigger, bool)>, overrides: Overrides) -> Result<(), String> {
+fn run_app(first: Option<(Trigger, bool)>, overrides: Overrides, offer_setup: bool) -> Result<(), String> {
     #[cfg(not(windows))]
     {
-        app::run(first, overrides)
+        app::run(first, overrides, offer_setup)
     }
     #[cfg(windows)]
     {
-        let _ = (first, overrides);
+        let _ = (first, overrides, offer_setup);
         Err("the desktop app does not run on Windows".into())
     }
 }
@@ -219,7 +220,7 @@ fn capture_command(arguments: &[String]) -> Result<(), String> {
             let screens = platform.capture_screens()?;
             screens.into_iter().next().ok_or("no screen to capture")?.image
         }
-        None => return run_app(Some((trigger, true)), request.overrides),
+        None => return run_app(Some((trigger, true)), request.overrides, false),
     };
     let finished = finish::finish_snip(platform.as_ref(), &image, &settings, &request.overrides)?;
     if let Some(error) = &finished.copy_error {

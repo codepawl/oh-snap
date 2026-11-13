@@ -257,10 +257,3 @@ pub fn start_recording(
     Ok(Box::new(recording))
 }
 
-fn display_pixel_scale(display: &objc2_screen_capture_kit::SCDisplay) -> f64 {
-    let filter = unsafe {
-        SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), display, &NSArray::<SCWindow>::new())
-    };
-    f64::from(unsafe { objc2_screen_capture_kit::SCShareableContent::infoForFilter(&filter).pointPixelScale() })
-}
-

@@ -1,9 +1,10 @@
 //! Start at sign-in, the app bundle's place on disk, the system shortcuts and updates.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use super::pure;
+use crate::desktop::platform::SetUp;
 
 fn run(program: &str, arguments: &[String]) -> Result<String, String> {
     let output = Command::new(program)
@@ -51,7 +52,43 @@ fn set_system_shortcuts(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether `install` has run: the sign-in agent is there.
+pub fn is_installed() -> bool {
+    home().is_ok_and(|home| pure::launch_agent_path(&home).exists())
+}
+
 pub fn install() -> Result<String, String> {
+    install_bundle().map(|(_, report)| report.join("\n"))
+}
+
+/// `install` from the app's setup card. When the app ran from somewhere else, such as the disk
+/// image, the copy in Applications must take over: it starts once this process has quit, so
+/// the two never fight over the hotkeys and the socket.
+pub fn set_up() -> Result<SetUp, String> {
+    let running = running_bundle()?;
+    let (installed, _) = install_bundle()?;
+    if installed == running {
+        return Ok(SetUp::Done);
+    }
+    let script = format!(
+        "while /bin/kill -0 {process} 2>/dev/null; do /bin/sleep 0.2; done; /bin/launchctl kickstart {domain}/{label}",
+        process = std::process::id(),
+        domain = launchd_domain(),
+        label = pure::BUNDLE_ID,
+    );
+    Command::new("/bin/sh")
+        .args(["-c", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("could not start the installed app: {error}"))?;
+    Ok(SetUp::Restart)
+}
+
+/// Puts the app in place, starts it at sign-in and takes the shortcuts. Returns where the app
+/// now is and what was done.
+fn install_bundle() -> Result<(PathBuf, Vec<String>), String> {
     let home = home()?;
     let mut report = Vec::new();
 
@@ -82,7 +119,7 @@ pub fn install() -> Result<String, String> {
 
     set_system_shortcuts(false)?;
     report.push("turned off the system screenshot shortcuts (Shift+Cmd+3, 4 and 5, and the clipboard ones)".into());
-    Ok(report.join("\n"))
+    Ok((installed, report))
 }
 
 pub fn uninstall() -> Result<String, String> {

@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::desktop::platform::{Platform, RecordOptions, Recording, Screen, Trigger, WindowInfo};
+use crate::desktop::platform::{Platform, RecordOptions, Recording, Screen, SetUp, Trigger, WindowInfo};
 use crate::output::Image;
 
 mod capture;
@@ -62,6 +62,14 @@ impl Platform for MacPlatform {
 
     fn uninstall(&self) -> Result<String, String> {
         install::uninstall()
+    }
+
+    fn setup_offer(&self) -> Option<&'static str> {
+        (!install::is_installed()).then_some("run at login, take Cmd+Shift+3/4/5")
+    }
+
+    fn set_up(&self) -> Result<SetUp, String> {
+        install::set_up()
     }
 
     fn make_gif(&self, recording: &Path) -> Result<PathBuf, String> {
