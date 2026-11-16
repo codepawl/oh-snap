@@ -1,6 +1,6 @@
 <p align="center"><img src="assets/oh-snap.png" width="96" alt="oh-snap logo"></p>
 
-# oh-snap
+<h1 align="center">oh-snap</h1>
 
 A fast screen snipping tool for Windows, macOS and Linux, written in Rust. On Windows it replaces Snipping Tool for PrtSc, Win+Shift+S and `ms-screenclip:` links. The program is one file of about 1.3 MB.
 
@@ -252,3 +252,25 @@ Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md
 ## License
 
 MIT. The bundled JetBrains Mono font is under the SIL Open Font License, in `assets/fonts`.
+
+<br>
+
+<p align="center">
+  <a href="https://codepawl.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/codepawl/.github/main/brand/codepawl-lockup-dark.png">
+      <img alt="CodePawl" src="https://raw.githubusercontent.com/codepawl/.github/main/brand/codepawl-lockup.png" width="160">
+    </picture>
+  </a>
+  <br>
+  <sub>Made by CodePawl, an independent 3D studio in Vietnam.</sub>
+  <br>
+  <sub>
+    <a href="https://codepawl.com">Website</a> ·
+    <a href="https://x.com/codepawl">X</a> ·
+    <a href="https://github.com/codepawl">GitHub</a> ·
+    <a href="https://huggingface.co/codepawl">Hugging Face</a> ·
+    <a href="https://www.youtube.com/@codepawlhq">YouTube</a> ·
+    <a href="https://www.threads.com/@codepawl">Threads</a>
+  </sub>
+</p>
